@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cubic-ph-spline"
+version = "1.1.0"
+description = "Planar cubic PH spline interpolation of convex and nonconvex data with rigorous numerics"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Hrvoje Abraham", email = "ahrvoje@gmail.com" }]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.11",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+examples = ["matplotlib>=3.7"]
+
+[tool.setuptools]
+packages = ["cubic_ph_spline"]
+
+[tool.setuptools.package-data]
+cubic_ph_spline = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::RuntimeWarning"]
