@@ -3,6 +3,11 @@
 Point-interpolating planar **cubic Pythagorean-hodograph (PH) splines** with
 verified geometry, exact arc length and fast distance-domain evaluation.
 
+![A 20-metre spline route with exact distance stations and two points five metres of travel apart](examples/readme_distance_evaluation.png)
+
+*Locate any position by distance travelled, place work at uniform intervals,
+or select two points an exact path distance apart.*
+
 `CubicPHSpline(points)` accepts convex, collinear and admissible nonconvex
 point data directly, without requiring tangent or curvature data. It produces
 an immutable regular spline that is G² throughout each convex run and G¹ only
@@ -148,6 +153,7 @@ uv venv .venv --python 3.14 && uv pip install -e .[test,examples]
 python -m pytest tests
 python examples/generate_examples.py
 python examples/generate_near_break.py
+python examples/generate_readme_distance_visual.py
 python examples/generate_nonconvex_shapes.py
 python examples/generate_nonconvex_pathological.py
 python benchmarks/benchmark.py
