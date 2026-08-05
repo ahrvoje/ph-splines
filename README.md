@@ -102,7 +102,7 @@ vectors are returned as NumPy `float64` arrays of shape `(2,)`.
 | `principal_normal(u)` | Unit normal toward the center of curvature; undefined on a straight segment. |
 | `signed_curvature(u)` | Signed scalar curvature. |
 | `curvature_vector(u)` | Left normal multiplied by signed curvature. |
-| `aux_inflection_points` | Fresh list of algorithm-inserted inflection points as `{"u", "s", "x", "y"}` dictionaries. |
+| `aux_inflection_points` | Algorithm-inserted inflection points as `{"u", "s", "x", "y"}` dicts. |
 | `arc_length(u)` | Length from the start through parameter `u`. |
 | `parameter_at_length(s)` | Parameter whose prefix length is `s`, for `s` in `[0, arc_length(1)]`. |
 | `point_at_length(s)` | Position at prefix length `s`. |
