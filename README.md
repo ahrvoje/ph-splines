@@ -5,8 +5,8 @@ verified geometry, exact arc length and fast distance-domain evaluation.
 
 ![A 20-metre spline route with exact distance stations and two points five metres of travel apart](examples/readme_distance_evaluation.png)
 
-*Locate any position by distance travelled, place work at uniform intervals,
-or select two points an exact path distance apart.*
+*Locate any position by distance travelled or select two points an exact path
+distance apart.*
 
 `CubicPHSpline(points)` accepts convex, collinear and admissible nonconvex
 point data directly, without requiring tangent or curvature data. It produces
@@ -42,7 +42,7 @@ curve.aux_inflection_points    # [] (none inserted for this convex input)
 
 L = curve.arc_length(1.0)      # exact (closed form, compensated prefix sums)
 u = curve.parameter_at_length(0.5 * L)
-curve.point_at_length(0.5 * L) # one locate + one inversion; globally C^1 in s
+curve.point_at_length(0.5 * L) # one locate + one inversion
 ```
 
 ## Gallery
@@ -147,18 +147,3 @@ constant-cost elementary local inversion, never an iterative geometric search.
   with prescribed arc lengths*](https://arxiv.org/pdf/2202.11371).
 - Gajny, Béarée, Nyiri and Gibaru, [*Path planning with PH G² splines in
   R²*](https://doi.org/10.1109/IConSCS.2012.6502455).
-
-## Development
-
-Python 3.14 is the project interpreter (see `AGENTS.md`).
-
-```
-uv venv .venv --python 3.14 && uv pip install -e .[test,examples]
-python -m pytest tests
-python examples/generate_examples.py
-python examples/generate_near_break.py
-python examples/generate_readme_distance_visual.py
-python examples/generate_nonconvex_shapes.py
-python examples/generate_nonconvex_pathological.py
-python benchmarks/benchmark.py
-```
