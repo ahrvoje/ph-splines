@@ -127,6 +127,23 @@ def test_closed_seam_is_position_and_frame_continuous():
     )
 
 
+def test_closed_g8_radial_star_preserves_twelve_fold_symmetry():
+    points = []
+    for index in range(24):
+        angle = math.pi * index / 12.0
+        radius = 1.0 if index % 2 == 0 else 1.9
+        points.append([radius * math.cos(angle), radius * math.sin(angle)])
+    curve = PHBSpline(points, closed=True, g_order=8)
+    angle = math.pi / 6.0
+    rotation = np.array(
+        [[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]]
+    )
+    for parameter in np.linspace(0.0, 1.0, 97, endpoint=False):
+        rotated = rotation @ curve.point(float(parameter))
+        advanced = curve.point(float((parameter + 1.0 / 12.0) % 1.0))
+        assert np.allclose(advanced, rotated, rtol=2e-12, atol=2e-12)
+
+
 @pytest.mark.parametrize("scale", [1.0e-150, 1.0e-50, 1.0e50, 1.0e150, 1.0e307])
 def test_power_scale_invariance(scale):
     curve = PHBSpline(POINTS)

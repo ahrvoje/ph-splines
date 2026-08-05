@@ -236,10 +236,10 @@ kept separately in [`examples/cubic`](examples/cubic).
 
 | | |
 |---|---|
-| ![G2 continuity example](examples/bspline/features/01_continuity_orders/001_continuity_orders.png) | ![Closed distance stations](examples/bspline/features/02_closed_distance_stations/005_closed_distance_stations.png) |
-| *Degree and continuity are selected from the request.* | *A closed curve with equal arc-length stations.* |
-| ![Local move example](examples/bspline/features/03_local_move/009_local_move.png) | ![Curvature-vector jet example](examples/bspline/features/08_curvature_vector_jets/012_curvature_vector_jets.png) |
-| *A handle-based G2 move recompiles ten local spans.* | *A derivative of the complete curvature vector.* |
+| ![Closed G8 radial zigzag star](examples/bspline/pathological/14_star_zigzag_radial.png) | ![Closed distance stations](examples/bspline/features/02_closed_distance_stations/005_closed_distance_stations.png) |
+| *A closed, symmetric radial zigzag star built from degree-17 G8 PH spans.* | *A closed curve with equal arc-length stations.* |
+| ![Local move example](examples/bspline/features/03_local_move/009_local_move.png) | ![G8 centripetal-force example](examples/bspline/features/07_arc_derivative_jets/010_arc_derivative_jets.png) |
+| *A handle-based G2 move recompiles ten local spans.* | *The G8 second arc-length derivative: the centripetal-force vector.* |
 
 ### Numerical design
 

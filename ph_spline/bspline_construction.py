@@ -67,6 +67,7 @@ class PHBSplineBuildState:
     spans: tuple[PHBSplineSpan, ...]
     span_keys: tuple[tuple[int, int, int], ...]
     preimage_controls: NDArray[np.complex128]
+    preimage_seam_sign: int
     prefix_normalized: NDArray[np.float64]
     prefix_user: NDArray[np.float64]
     total_length: float
@@ -277,7 +278,7 @@ def _parameter_widths(
 
 def _guide_preimage(
     points: NDArray[np.complex128], widths: NDArray[np.float64], closed: bool
-) -> NDArray[np.complex128]:
+) -> tuple[NDArray[np.complex128], int]:
     count = points.size
     span_count = widths.size
     secants = np.empty(span_count, dtype=np.complex128)
@@ -319,8 +320,10 @@ def _guide_preimage(
         for i in range(1, count):
             if abs(-roots[i] - roots[i - 1]) < abs(roots[i] - roots[i - 1]):
                 roots[i] = -roots[i]
-        return roots
-    # Two-state deterministic cycle optimization; a global sign is immaterial.
+        return roots, 1
+    # Optimize both possible lifts of the squared tangent around the cycle.
+    # A regular simple closed curve has odd turning number, so its continuous
+    # square root is antiperiodic even though w**2 is periodic.
     signs = (1.0, -1.0)
     costs = np.full((count, 2), math.inf)
     parent = np.zeros((count, 2), dtype=np.int8)
@@ -335,17 +338,22 @@ def _guide_preimage(
             ]
             parent[i, state] = int(np.argmin(options))
             costs[i, state] = options[parent[i, state]]
-    final_costs = [
-        costs[-1, state] + abs(signs[state] * roots[-1] - roots[0]) ** 2
-        for state in range(2)
-    ]
-    state = int(np.argmin(final_costs))
+    endings = []
+    for seam_sign in (1, -1):
+        final_costs = [
+            costs[-1, state]
+            + abs(signs[state] * roots[-1] - seam_sign * roots[0]) ** 2
+            for state in range(2)
+        ]
+        state = int(np.argmin(final_costs))
+        endings.append((float(final_costs[state]), -seam_sign, seam_sign, state))
+    _, _, seam_sign, state = min(endings)
     selected = np.empty(count, dtype=np.complex128)
     for i in range(count - 1, -1, -1):
         selected[i] = signs[state] * roots[i]
         if i:
             state = int(parent[i, state])
-    return selected
+    return selected, seam_sign
 
 
 def _closed_offset(widths: NDArray[np.float64], start: int, offset: int) -> float:
@@ -643,6 +651,7 @@ def _construct_basis_spans(
     join_count = len(solution.span_controls) if closed else len(solution.span_controls) - 1
     for left_span in range(join_count):
         right_span = (left_span + 1) % len(solution.span_controls)
+        join_sign = basis.seam_sign if closed and right_span == 0 else 1
         left_width = float(basis.span_widths[left_span])
         right_width = float(basis.span_widths[right_span])
         for order in range(required_order):
@@ -654,14 +663,16 @@ def _construct_basis_spans(
                 if magnitude == 0.0
                 else magnitude
                 * 0.5
-                * (left_value / magnitude + right_value / magnitude)
+                * (left_value / magnitude + join_sign * right_value / magnitude)
             )
             # The two values are extractions of one mathematical B-spline
             # knot jet.  Store one canonical physical value on both spans so
             # endpoint evaluation does not inherit cancellation from two
             # differently scaled Bernstein difference ladders.
             right_jets[left_span][order] = common * left_width**order
-            left_jets[right_span][order] = common * right_width**order
+            left_jets[right_span][order] = (
+                join_sign * common * right_width**order
+            )
     for span_id, preimage in enumerate(solution.span_controls):
         user_span = int(basis.span_to_user[span_id])
         endpoint = (user_span + 1) % normalized.size
@@ -733,21 +744,21 @@ def _construct_basis_spans(
     return tuple(spans), tuple(keys), min_ratio, max_residual
 
 
-def _verify_continuity(
-    spans: tuple[PHBSplineSpan, ...], required_order: int, closed: bool
+def _verify_continuity_pairs(
+    pairs: list[tuple[PHBSplineSpan, PHBSplineSpan, int]],
+    required_order: int,
 ) -> float:
+    if not pairs:
+        return 0.0
     maximum = 0.0
-    pairs = list(pairwise(spans))
-    if closed:
-        pairs.append((spans[-1], spans[0]))
-    for left, right in pairs:
+    for left, right, join_sign in pairs:
         for order in range(required_order):
             left_value = left.w_derivative(1.0, order) / left.parameter_width**order
             right_value = right.w_derivative(0.0, order) / right.parameter_width**order
-            residual = abs(left_value - right_value)
+            residual = abs(left_value - join_sign * right_value)
             scale = max(1.0, abs(left_value), abs(right_value))
             maximum = max(maximum, residual / scale)
-    degree = spans[0].preimage_degree
+    degree = pairs[0][0].preimage_degree
     # Endpoint derivatives are alternating Bernstein differences.  Their
     # forward error grows with both derivative order and the binomial sum;
     # 4**r is a conservative bound for the two one-sided difference ladders.
@@ -760,6 +771,18 @@ def _verify_continuity(
             bound=f"<= {tolerance:.3e}",
         )
     return maximum
+
+
+def _verify_continuity(
+    spans: tuple[PHBSplineSpan, ...],
+    required_order: int,
+    closed: bool,
+    seam_sign: int = 1,
+) -> float:
+    pairs = [(left, right, 1) for left, right in pairwise(spans)]
+    if closed:
+        pairs.append((spans[-1], spans[0], seam_sign))
+    return _verify_continuity_pairs(pairs, required_order)
 
 
 def _span_partition(
@@ -880,6 +903,17 @@ def _physical_endpoint_jet(
     )
 
 
+def _negate_span_preimage(span: PHBSplineSpan) -> PHBSplineSpan:
+    """Change only the square-root gauge; PH geometry and metric are unchanged."""
+
+    return replace(
+        span,
+        preimage=_readonly(-span.preimage),
+        preimage_left_jet=_readonly(-span.preimage_left_jet),
+        preimage_right_jet=_readonly(-span.preimage_right_jet),
+    )
+
+
 def build_ph_bspline_local_state(
     old: PHBSplineBuildState,
     points_input: object,
@@ -942,14 +976,31 @@ def build_ph_bspline_local_state(
     patch_widths = np.asarray(widths[list(patch)], dtype=np.float64)
     patch_ids = tuple(point_ids[index] for index in patch_point_indices)
     basis = build_preimage_basis(patch_widths, required_order, False)
+    patch_guide, _ = _guide_preimage(patch_normalized, patch_widths, False)
     initial = guide_controls(
-        basis, _guide_preimage(patch_normalized, patch_widths, False)
+        basis, patch_guide
     )
     old_by_key = {
         key: span for key, span in zip(old.span_keys, old.spans, strict=True)
     }
     first_interval = patch[0]
     last_interval = patch[-1]
+    wrap_at = next(
+        (
+            index
+            for index in range(1, len(patch))
+            if patch[index] < patch[index - 1]
+        ),
+        None,
+    )
+    patch_gauge = (
+        old.preimage_seam_sign if closed and first_interval == 0 else 1
+    )
+    right_gauge = patch_gauge
+    if wrap_at is not None:
+        right_gauge *= old.preimage_seam_sign
+    if closed and last_interval == widths.size - 1:
+        right_gauge *= old.preimage_seam_sign
     left_jet = None
     right_jet = None
     if closed or first_interval > 0:
@@ -962,6 +1013,7 @@ def build_ph_bspline_local_state(
         after_endpoint = (after + 1) % normalized.size
         key = (point_ids[after], point_ids[after_endpoint], 0)
         right_jet = _physical_endpoint_jet(old_by_key[key], 0, required_order)
+        right_jet *= right_gauge
 
     normalized_bound = (
         numerics.position_eps_factor
@@ -1025,6 +1077,16 @@ def build_ph_bspline_local_state(
                 )
             ),
         )
+    gauge = patch_gauge
+    for local_interval in range(len(patch)):
+        if wrap_at == local_interval:
+            gauge *= old.preimage_seam_sign
+        if gauge == -1:
+            for subspan in (0, 1):
+                span_index = 2 * local_interval + subspan
+                local_spans[span_index] = _negate_span_preimage(
+                    local_spans[span_index]
+                )
 
     patch_lookup: dict[tuple[int, int, int], PHBSplineSpan] = {}
     for local_interval, interval in enumerate(patch):
@@ -1048,27 +1110,32 @@ def build_ph_bspline_local_state(
             span_keys.append(key)
     spans = tuple(assembled)
 
-    continuity_residual = _verify_continuity(tuple(local_spans), required_order, False)
-    if left_jet is not None:
-        before = (first_interval - 1) % widths.size
-        continuity_residual = max(
-            continuity_residual,
-            _verify_continuity(
-                (spans[2 * before + 1], spans[2 * first_interval]),
-                required_order,
-                False,
+    rebuilt_span_ids = {
+        2 * interval + subspan for interval in patch for subspan in (0, 1)
+    }
+    join_ids: set[int] = set()
+    for span_id in rebuilt_span_ids:
+        if span_id > 0:
+            join_ids.add(span_id - 1)
+        elif closed:
+            join_ids.add(len(spans) - 1)
+        if span_id + 1 < len(spans) or closed:
+            join_ids.add(span_id)
+    continuity_pairs = [
+        (
+            spans[left],
+            spans[(left + 1) % len(spans)],
+            (
+                old.preimage_seam_sign
+                if closed and left == len(spans) - 1
+                else 1
             ),
         )
-    if right_jet is not None:
-        after = (last_interval + 1) % widths.size
-        continuity_residual = max(
-            continuity_residual,
-            _verify_continuity(
-                (spans[2 * last_interval + 1], spans[2 * after]),
-                required_order,
-                False,
-            ),
-        )
+        for left in sorted(join_ids)
+    ]
+    continuity_residual = _verify_continuity_pairs(
+        continuity_pairs, required_order
+    )
     max_residual = max(patch_residual, solution.max_displacement_residual)
     if max_residual > normalized_bound:
         raise InterpolationVerificationError(
@@ -1145,6 +1212,7 @@ def build_ph_bspline_local_state(
         spans=spans,
         span_keys=tuple(span_keys),
         preimage_controls=solution.controls,
+        preimage_seam_sign=old.preimage_seam_sign,
         prefix_normalized=_readonly(prefix_normalized),
         prefix_user=_readonly(prefix_user),
         total_length=float(prefix_user[-1]),
@@ -1214,8 +1282,13 @@ def build_ph_bspline_state(
         * max(1.0, float(np.max(np.abs(normalized))))
         * (actual_degree + 1) ** 2
     )
-    guide = _guide_preimage(normalized, widths, bool(closed))
-    basis = build_preimage_basis(widths, actual_degree, bool(closed))
+    guide, seam_sign = _guide_preimage(normalized, widths, bool(closed))
+    basis = build_preimage_basis(
+        widths,
+        actual_degree,
+        bool(closed),
+        seam_sign=seam_sign,
+    )
     initial = guide_controls(basis, guide)
     chords = np.asarray(
         [
@@ -1253,7 +1326,12 @@ def build_ph_bspline_state(
         reusable=reusable,
     )
     max_residual = max(max_residual, solution.max_displacement_residual)
-    continuity_residual = _verify_continuity(spans, required_order, bool(closed))
+    continuity_residual = _verify_continuity(
+        spans,
+        required_order,
+        bool(closed),
+        seam_sign,
+    )
     if max_residual > normalized_bound:
         raise InterpolationVerificationError(
             "Compiled PH spans miss interpolation points",
@@ -1346,6 +1424,7 @@ def build_ph_bspline_state(
         spans=spans,
         span_keys=span_keys,
         preimage_controls=solution.controls,
+        preimage_seam_sign=seam_sign,
         prefix_normalized=_readonly(prefix_normalized),
         prefix_user=_readonly(prefix_user),
         total_length=float(prefix_user[-1]),

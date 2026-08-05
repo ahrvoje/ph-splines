@@ -28,6 +28,7 @@ class PreimageBasis:
 
     degree: int
     closed: bool
+    seam_sign: int
     user_widths: NDArray[np.float64]
     span_widths: NDArray[np.float64]
     user_breaks: NDArray[np.float64]
@@ -171,9 +172,17 @@ def _periodic_break(
 
 
 def build_preimage_basis(
-    user_widths: NDArray[np.float64], degree: int, closed: bool
+    user_widths: NDArray[np.float64],
+    degree: int,
+    closed: bool,
+    seam_sign: int = 1,
 ) -> PreimageBasis:
     """Build a degree-``degree`` simple-knot basis and Bezier extraction."""
+
+    if seam_sign not in (-1, 1):
+        raise ValueError("seam_sign must be -1 or 1")
+    if not closed and seam_sign != 1:
+        raise ValueError("an open preimage basis must have seam_sign=1")
 
     # One midpoint knot per interpolation interval provides enough local
     # freedom for robust interpolation and subsequent bounded patch repair,
@@ -214,11 +223,16 @@ def build_preimage_basis(
             spline_knots, degree, knot_span, float(span_widths[span])
         )
         if closed:
-            raw_indices = np.arange(span, span + width, dtype=np.int64) % control_count
+            extended_indices = np.arange(span, span + width, dtype=np.int64)
+            wrap_count, raw_indices = np.divmod(extended_indices, control_count)
+            wrap_signs = np.asarray(
+                [seam_sign ** int(count) for count in wrap_count],
+                dtype=np.float64,
+            )
             unique, inverse = np.unique(raw_indices, return_inverse=True)
             collapsed = np.zeros((width, unique.size), dtype=np.float64)
             for column, target in enumerate(inverse):
-                collapsed[:, target] += local[:, column]
+                collapsed[:, target] += wrap_signs[column] * local[:, column]
             indices = unique
             local = collapsed
         else:
@@ -236,11 +250,12 @@ def build_preimage_basis(
         dtype=np.float64,
     )
     if closed:
-        greville = np.mod(greville[:control_count], span_breaks[-1])
+        greville = greville[:control_count]
 
     return PreimageBasis(
         degree=degree,
         closed=closed,
+        seam_sign=seam_sign,
         user_widths=_readonly(user_widths),
         span_widths=_readonly(span_widths),
         user_breaks=_readonly(user_breaks),
@@ -263,14 +278,22 @@ def guide_controls(
     if basis.closed:
         period = float(basis.user_breaks[-1])
         sample_x = np.concatenate((basis.user_breaks[:-1], [period]))
-        sample_y = np.concatenate((guide, guide[:1]))
+        sample_y = np.concatenate((guide, basis.seam_sign * guide[:1]))
+        wrap_count = np.floor(x / period).astype(np.int64)
         x = np.mod(x, period)
     else:
         sample_x = basis.user_breaks
         sample_y = guide
     real = np.interp(x, sample_x, sample_y.real)
     imag = np.interp(x, sample_x, sample_y.imag)
-    return np.asarray(real + 1j * imag, dtype=np.complex128)
+    result = np.asarray(real + 1j * imag, dtype=np.complex128)
+    if basis.closed:
+        wrap_signs = np.asarray(
+            [basis.seam_sign ** int(count) for count in wrap_count],
+            dtype=np.float64,
+        )
+        result *= wrap_signs
+    return result
 
 
 def _constraints_and_jacobian(

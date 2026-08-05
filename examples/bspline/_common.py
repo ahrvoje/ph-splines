@@ -14,11 +14,20 @@ import numpy as np
 from ph_spline import PHBSpline
 
 INK = "#172033"
+SURFACE = "#fcfcfb"
+PAGE = "#f9f9f7"
 GRID = "#d9dee8"
 SPLINE = "#1769aa"
 BEFORE = "#8a94a6"
 POINT = "#ed6a5a"
 VECTOR = "#df8b18"
+
+plt.rcParams.update(
+    {
+        "figure.facecolor": PAGE,
+        "axes.facecolor": SURFACE,
+    }
+)
 
 
 def normalized_samples(curve: PHBSpline, count: int = 600) -> np.ndarray:
@@ -110,7 +119,7 @@ def render_curve(
     ax.set_title(subtitle, loc="left", color=INK, fontsize=7.5)
     ax.legend(loc="best", frameon=False, fontsize=7.5)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, bbox_inches="tight", facecolor="white")
+    fig.savefig(path, bbox_inches="tight", facecolor=PAGE)
     plt.close(fig)
 
 

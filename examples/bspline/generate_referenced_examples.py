@@ -6,6 +6,7 @@ Run from the repository root:
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -25,6 +26,16 @@ from ph_spline import PHBSpline
 OUT = Path(__file__).resolve().parent
 
 
+def closed_radial_star() -> list[list[float]]:
+    """Return the exact 12-fold-symmetric nodes for the closed star case."""
+    points = []
+    for index in range(24):
+        angle = math.pi * index / 12.0
+        radius = 1.0 if index % 2 == 0 else 1.9
+        points.append([radius * math.cos(angle), radius * math.sin(angle)])
+    return points
+
+
 def collections():
     yield "base", generate_examples.EXAMPLES
     yield "nonconvex", generate_nonconvex_shapes.EXAMPLES
@@ -41,12 +52,21 @@ def main() -> None:
     for group, cases in collections():
         for index, (name, points, note) in enumerate(cases, 1):
             try:
-                curve = PHBSpline(points)
+                is_radial_star = name == "star_zigzag_radial"
+                curve = PHBSpline(
+                    closed_radial_star() if is_radial_star else points,
+                    closed=is_radial_star,
+                    g_order=8 if is_radial_star else 2,
+                )
                 render_curve(
                     curve,
                     OUT / group / f"{index:02d}_{name}.png",
                     f"{group} {index:02d} · {name}",
-                    note,
+                    (
+                        "closed 12-fold-symmetric radial star"
+                        if is_radial_star
+                        else note
+                    ),
                 )
                 rendered += 1
                 print(f"ok {group:12s} {index:02d} {name}")

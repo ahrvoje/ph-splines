@@ -145,7 +145,11 @@ def main() -> None:
             curve,
             output(7, case, "arc_derivative_jets"),
             f"arc-length derivative order {derivative_order}",
-            "one shared Taylor-series recurrence",
+            (
+                "centripetal-force vector: the G8 unit-speed second derivative"
+                if case == 9
+                else "one shared Taylor-series recurrence"
+            ),
             vectors=vectors,
         )
         count += 1
