@@ -64,6 +64,18 @@ autonomous navigation, constant-speed animation, spatial and GIS queries,
 collision sampling, physical simulation, sensing, inspection, and placement
 of textures, annotations or material along a curve.
 
+## Background
+
+Write a planar polynomial curve as `z(t) = x(t) + iy(t)`, with velocity
+`z'(t)`. Its speed `sqrt(x'(t)^2 + y'(t)^2)` is generally not polynomial. A PH
+curve instead makes `|z'(t)|^2 = x'(t)^2 + y'(t)^2 = sigma(t)^2`, so speed and
+its arc-length integral are polynomials.
+
+This implementation joins planar cubic PH Bézier segments with complex form
+`z'(t) = (a + bt)^2`. Their speed `|a + bt|^2` is quadratic, so arc length is
+cubic; distance inversion is one monotone cubic solve, expressible with cube
+roots or hyperbolic functions. Bounded Newton iterations only correct rounding.
+
 ## Numerical design highlights
 
 - All construction in normalized coordinates (origin `P0`, scale = longest
