@@ -2,8 +2,8 @@
 
 The provided Pythagorean-hodograph (PH) spline objects feature highly efficient, accurate and robust random-distance access through the `point_at_length` API.
 
-- `CubicPHSpline` is highly efficient for static use cases.
-- `PHBSpline` supports dynamic editing (moving, adding and deleting nodes) with prescribed continuity-order constraints.
+- Cubic PH Spline (`CubicPHSpline`) is highly efficient for static use cases.
+- PH B-spline (`PHBSpline`) supports dynamic editing (moving, adding and deleting nodes) with prescribed continuity-order constraints.
 
 ## 1. Cubic PH Spline
 
@@ -126,10 +126,12 @@ vectors are returned as NumPy `float64` arrays of shape `(2,)`.
 | `parameter_at_length(s)` | Parameter whose prefix length is `s`, for `s` in `[0, arc_length(1)]`. |
 | `point_at_length(s)` | Position at prefix length `s`. |
 
-All package exceptions derive from `CubicPHSplineError`. Invalid input and
-query arguments also derive from `ValueError`; numerical construction and
-inversion failures also derive from `RuntimeError`. Construction exceptions
-provide `index`, `quantity`, `value`, and `bound` diagnostic attributes.
+All package exceptions derive from `PHSplineError`. `CubicPHSplineError` and
+`PHBSplineError` are sibling family roots; neither inherits from the other.
+Shared failures can be caught through either family. Invalid input and query
+arguments also derive from `ValueError`; numerical construction and inversion
+failures also derive from `RuntimeError`. Construction exceptions provide
+`index`, `quantity`, `value`, and `bound` diagnostic attributes.
 
 ### Benchmarks
 

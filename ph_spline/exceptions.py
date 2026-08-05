@@ -40,6 +40,9 @@ __all__ = [
     "PHBSplineError",
     "PHBSplineRuntimeError",
     "PHBSplineValueError",
+    "PHSplineError",
+    "PHSplineRuntimeError",
+    "PHSplineValueError",
     "ParameterOutOfRangeError",
     "ResourceLimitError",
     "ReversalError",
@@ -51,8 +54,8 @@ __all__ = [
 ]
 
 
-class PHBSplineError(Exception):
-    """Base class of every PH B-spline exception."""
+class PHSplineError(Exception):
+    """Base class of every package exception."""
 
     def __init__(
         self,
@@ -101,31 +104,43 @@ class PHBSplineError(Exception):
         super().__init__(message)
 
 
-class CubicPHSplineError(PHBSplineError):
+class PHSplineValueError(PHSplineError, ValueError):
+    """Shared base for invalid spline input data and query arguments."""
+
+
+class PHSplineRuntimeError(PHSplineError, RuntimeError):
+    """Shared base for verified numerical-operation failures."""
+
+
+class CubicPHSplineError(PHSplineError):
     """Base class of every cubic PH-spline exception."""
 
 
-class PHBSplineValueError(PHBSplineError, ValueError):
+class PHBSplineError(PHSplineError):
+    """Base class of every PH B-spline exception."""
+
+
+class CubicPHSplineValueError(CubicPHSplineError, PHSplineValueError):
+    """Invalid cubic PH-spline input data or method arguments."""
+
+
+class PHBSplineValueError(PHBSplineError, PHSplineValueError):
     """Invalid PH B-spline input data or query arguments."""
 
 
-class CubicPHSplineValueError(PHBSplineValueError, CubicPHSplineError):
-    """Invalid input data or invalid method arguments."""
-
-
-class InvalidPointDataError(CubicPHSplineValueError):
+class InvalidPointDataError(CubicPHSplineValueError, PHBSplineValueError):
     """The point container or a point element is malformed."""
 
 
-class InsufficientPointDataError(CubicPHSplineValueError):
+class InsufficientPointDataError(CubicPHSplineValueError, PHBSplineValueError):
     """Fewer than two input points were supplied."""
 
 
-class NonFiniteCoordinateError(CubicPHSplineValueError):
+class NonFiniteCoordinateError(CubicPHSplineValueError, PHBSplineValueError):
     """An input coordinate is NaN or infinite."""
 
 
-class DegeneratePointDataError(CubicPHSplineValueError):
+class DegeneratePointDataError(CubicPHSplineValueError, PHBSplineValueError):
     """Consecutive input points coincide (a zero-length chord)."""
 
 
@@ -141,24 +156,26 @@ class InterpolationDomainError(CubicPHSplineValueError):
     """An interior turn-angle pair violates the uniqueness bound."""
 
 
-class ParameterOutOfRangeError(CubicPHSplineValueError):
+class ParameterOutOfRangeError(CubicPHSplineValueError, PHBSplineValueError):
     """A global parameter ``u`` lies outside ``[0, 1]``."""
 
 
-class ArcLengthOutOfRangeError(CubicPHSplineValueError):
+class ArcLengthOutOfRangeError(CubicPHSplineValueError, PHBSplineValueError):
     """An arc length ``s`` lies outside ``[0, L]``."""
 
 
-class UndefinedPrincipalNormalError(CubicPHSplineValueError):
+class UndefinedPrincipalNormalError(
+    CubicPHSplineValueError, PHBSplineValueError
+):
     """Principal normal requested on a completely straight spline."""
 
 
-class PHBSplineRuntimeError(PHBSplineError, RuntimeError):
+class CubicPHSplineRuntimeError(CubicPHSplineError, PHSplineRuntimeError):
+    """A verified cubic numerical operation could not be completed."""
+
+
+class PHBSplineRuntimeError(PHBSplineError, PHSplineRuntimeError):
     """A verified PH B-spline numerical operation could not be completed."""
-
-
-class CubicPHSplineRuntimeError(PHBSplineRuntimeError, CubicPHSplineError):
-    """A verified numerical construction step could not be completed."""
 
 
 class SplineConvergenceError(CubicPHSplineRuntimeError):
@@ -169,7 +186,7 @@ class NonAdmissibleSegmentError(CubicPHSplineRuntimeError):
     """A Bezier control polygon violates the orientation admissibility test."""
 
 
-class NonRegularSplineError(CubicPHSplineRuntimeError):
+class NonRegularSplineError(CubicPHSplineRuntimeError, PHBSplineRuntimeError):
     """A constructed PH segment is nearly cuspidal (speed too close to zero)."""
 
 
@@ -177,15 +194,15 @@ class G2VerificationError(CubicPHSplineRuntimeError):
     """Independent post-construction G2 or documented G1 verification failed."""
 
 
-class ArcLengthInversionError(CubicPHSplineRuntimeError):
+class ArcLengthInversionError(CubicPHSplineRuntimeError, PHBSplineRuntimeError):
     """The safeguarded local arc-length inversion missed its residual bound."""
 
 
-class LengthResolutionError(CubicPHSplineRuntimeError):
+class LengthResolutionError(CubicPHSplineRuntimeError, PHBSplineRuntimeError):
     """Prefix arc lengths are not strictly increasing in binary64."""
 
 
-class NumericalPrecisionError(CubicPHSplineRuntimeError):
+class NumericalPrecisionError(CubicPHSplineRuntimeError, PHBSplineRuntimeError):
     """A quantity cannot be computed reliably in binary64 arithmetic."""
 
 

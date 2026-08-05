@@ -1869,35 +1869,49 @@ Case conversion and aliases are not required.
 
 # 16. Exception hierarchy
 
-All package exceptions shall derive from:
+All package exceptions shall derive from `PHSplineError`.
+`CubicPHSplineError` and `PHBSplineError` are sibling family roots; neither
+shall inherit from the other.  The value and runtime branches follow the same
+rule through neutral package bases:
 
 ```text
-CubicPHSplineError
+PHSplineError
+|-- PHSplineValueError, ValueError
+|-- PHSplineRuntimeError, RuntimeError
+|-- CubicPHSplineError
+`-- PHBSplineError
+
+CubicPHSplineValueError
+    : CubicPHSplineError, PHSplineValueError
+CubicPHSplineRuntimeError
+    : CubicPHSplineError, PHSplineRuntimeError
+PHBSplineValueError
+    : PHBSplineError, PHSplineValueError
+PHBSplineRuntimeError
+    : PHBSplineError, PHSplineRuntimeError
 ```
 
-Recommended hierarchy:
+Shared failures derive from both sibling concrete branches so either spline
+family root catches an error used by both implementations:
 
 ```text
-CubicPHSplineError
-|-- CubicPHSplineValueError
-|   |-- InvalidPointDataError
-|   |-- InsufficientPointDataError
-|   |-- NonFiniteCoordinateError
-|   |-- DegeneratePointDataError
-|   |-- NonSimplePointDataError
-|   |-- ReversalError
-|   |-- InterpolationDomainError
-|   |-- ParameterOutOfRangeError
-|   |-- ArcLengthOutOfRangeError
-|   `-- UndefinedPrincipalNormalError
-`-- CubicPHSplineRuntimeError
-    |-- SplineConvergenceError
-    |-- NonAdmissibleSegmentError
-    |-- NonRegularSplineError
-    |-- G2VerificationError
-    |-- ArcLengthInversionError
-    |-- LengthResolutionError
-    `-- NumericalPrecisionError
+Shared value errors:
+    InvalidPointDataError, InsufficientPointDataError,
+    NonFiniteCoordinateError, DegeneratePointDataError,
+    ParameterOutOfRangeError, ArcLengthOutOfRangeError,
+    UndefinedPrincipalNormalError
+
+Shared runtime errors:
+    NonRegularSplineError, ArcLengthInversionError,
+    LengthResolutionError, NumericalPrecisionError
+
+Cubic-only value errors:
+    NonSimplePointDataError, ReversalError,
+    InterpolationDomainError
+
+Cubic-only runtime errors:
+    SplineConvergenceError, NonAdmissibleSegmentError,
+    G2VerificationError
 ```
 
 `NonConvexDataError` from earlier revisions of this specification is
@@ -2184,6 +2198,7 @@ and their documented exception types:
 ```text
 PHSpline
 CubicPHSpline
+PHSplineError
 CubicPHSplineError
 ```
 

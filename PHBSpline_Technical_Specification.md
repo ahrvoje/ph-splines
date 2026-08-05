@@ -27,13 +27,24 @@ header-includes:
 
 # Document status
 
-**Status:** implementation specification, revision 0.3.
+**Status:** as-built implementation specification, revision 0.4.
 
-**Target:** a new `PHBSpline` class and supporting package architecture derived from the numerical and API principles of [`ahrvoje/cubic-ph-spline`](https://github.com/ahrvoje/cubic-ph-spline), but generalized from immutable cubic PH segments to mutable, variable-order planar PH B-splines.
+**Target:** the repository `PHBSpline` reference implementation, generalized
+from immutable cubic PH segments to mutable, variable-order planar PH
+B-splines. This revision incorporates the minimum-degree basis correction and
+the periodic/antiperiodic closed-preimage seam correction.
 
 **Reviewed baseline:** repository `main` as retrieved on 2026-08-05; package metadata reports version 1.1.0. The retrieved test suite completed with **491 passed** under the review environment. The baseline package documents normalized construction, independently verified nonlinear solves, exact polynomial arc length, cancellation-resistant cubic inversion, and approximately 5-6 microseconds per scalar random `point_at_length` query for 100 through 10,000 segments on its reported benchmark platform.
 
-This document is normative. It is intended to be handed directly to an implementation team.
+**Current verification:** the combined repository suite completed with **719
+passed** after this reconstruction audit.
+
+This document is normative for reconstruction of the reference mathematical
+core. Sections explicitly marked **future extension** are design directions,
+not claims about the current implementation. Where an earlier revision and
+the reference code disagreed, this revision describes the independently
+tested code path; silent substitution of a different degree, seam topology,
+solver objective, or indexing structure is nonconforming.
 
 The terms **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** are to be interpreted as requirement levels.
 
@@ -44,9 +55,17 @@ The terms **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOU
 1. It accepts an ordered sequence of finite planar points in arbitrary geometric configuration: convex, nonconvex, inflectional, self-intersecting, looping, backtracking, or containing nonconsecutive repeated points. Consecutive coincident points are rejected by default because they do not define a nonzero interpolation span.
 2. It represents a piecewise polynomial Pythagorean-hodograph curve using a complex polynomial B-spline preimage. Its speed and cumulative arc length are piecewise polynomials constructed analytically, without numerical quadrature.
 3. It supports any requested finite continuity orders `g_order`, `c_order`, and `curvature_order`, subject to configured degree and resource limits. If none are supplied, the default guarantee is `G2`.
-4. It supports exact interpolation-point move, insertion, and deletion as atomic local patch operations. In strict-local mode, the work is bounded independently of total point count and the operation either commits a verified patch or raises and rolls back. In expanding mode, the patch may grow and worst-case work may become linear in the number of points.
+4. It supports exact interpolation-point move, insertion, and deletion as
+atomic local patch operations. Geometry compilation is local and unchanged
+exterior span kernels are structurally shared. The reference implementation
+still performs whole-object validation, array assembly, and flat-prefix
+publication, so total edit latency is currently $O(N)$ even though the
+nonlinear solve and span recompilation are bounded.
 5. It provides an API adapted from `CubicPHSpline`: `point`, `tangent`, `normal`, `principal_normal`, `signed_curvature`, `curvature_vector`, `arc_length`, `parameter_at_length`, and `point_at_length`, plus arbitrary-order derivative-vector and curvature-vector queries, batch queries, and dynamic-edit APIs.
-6. Random distance access uses an augmented length tree, a per-span inverse lookup kernel, and safeguarded Halley/Newton/ITP correction. The result is accepted only after a forward arc-length residual test near binary64 precision.
+6. Random distance access uses a compensated flat prefix array, binary search,
+a per-span parameter/length LUT, and bracketed Newton correction with bisection
+fallback. The result is accepted only after a forward or reverse arc-length
+residual test near binary64 precision.
 7. Every constructor and edit operation is transactional. Solver success flags are never sufficient. Interpolation, continuity, PH reconstruction, regularity, arc-length monotonicity, and inverse-kernel postconditions are independently verified before commit.
 8. The internal curve, hodograph, speed, arc-length polynomial, tangent, normal, curvature, and PH offset data are constructively derived from the preimage coefficients. The interpolation coefficients themselves are generally obtained by a deterministic nonlinear solve, not by a universal symbolic formula.
 
@@ -147,7 +166,7 @@ The new package SHALL retain these principles from `cubic-ph-spline`:
 | Primitive degree | Cubic PH segments | Degree deduced from continuity request; default quintic PH |
 | Arc inverse | Elementary monotone cubic inverse | Cached monotone inverse plus safeguarded polynomial correction |
 | Object mutability | Immutable | Mutable, transactional, with immutable snapshots |
-| Metric index | Flat compensated prefix array | Dynamic augmented tree; optional compact snapshot array |
+| Metric index | Flat compensated prefix array | Flat compensated prefix array in the reference profile; an augmented tree is a future extension |
 | Nonconvex handling | Specialized cubic preprocessing | No convexity admissibility restriction; generic regular PH solve |
 | Continuity | G2 on convex runs, G1 at selected transitions | User-selected finite G, C, and curvature continuity, verified at every join |
 | Geometry queries | Tangent and order-zero curvature vector | Arbitrary-order parameter/arc-length derivative vectors and curvature-vector derivatives |
@@ -160,13 +179,13 @@ The implementation plan is based on a direct review of the repository source and
 
 | Baseline file | Observed responsibility | Requirement for `PHBSpline` |
 |---|---|---|
-| `ph_spline/cubic.py` | Immutable public API, scalar validation, global parameter dispatch, prefix-length lookup, construction post-verification | Retain scalar semantics and verification style; split mutable ownership from immutable snapshot querying; replace flat prefixes with a dynamic tree |
+| `ph_spline/cubic.py` | Immutable public API, scalar validation, global parameter dispatch, prefix-length lookup, construction post-verification | Retain scalar semantics and verification style; use immutable span kernels and atomic state publication; keep flat prefixes in the reference profile |
 | `segment.py` | Dual cubic Bezier and linear complex-preimage storage; point, tangent, speed, curvature, and local inverse methods | Generalize to variable-degree immutable `SpanKernel` with Bernstein preimage, exact speed/arc controls, and compiled numerical inverse |
 | `arclength.py` | FMA Horner forms, cancellation-aware cubic arc evaluation, scaled hyperbolic/Cardano estimate, endpoint-reversed inversion, bounded safeguarded Newton, explicit residual gate | Retain forward/reverse evaluation, fixed iteration bounds, residual verification, and endpoint exactness; replace the cubic estimator by the LUT seed and generic monotone polynomial correction |
-| `construction.py` | Input validation, normalization, geometric planning, segment assembly | Retain validation and normalized local solving; replace convex-run/cubic-specific planning with generic preimage B-spline constraints and hidden-knot refinement |
+| `construction.py` | Input validation, normalization, geometric planning, segment assembly | Retain validation and normalized solving; replace convex-run/cubic-specific planning with a minimum-degree simple-knot preimage and exact displacement constraints |
 | `nonlinear.py` | Deterministic bounded nonlinear solve with structured fallback and independent acceptance | Retain determinism, analytic/complex-step verification, damping, and hard bounds; generalize to banded equality-constrained PH displacement solves |
 | `exceptions.py` | Value/runtime dual inheritance and structured diagnostics | Preserve the pattern, expand fields for point IDs, span IDs, edit operation, and patch |
-| `tests/` | Arc inversion, extreme scale, frames, G2, nonconvex data, invariants, straight cases, and validation | Port all behavioral intents and add variable-order, dynamic-edit, tree, and 100,000-point tests |
+| `tests/` | Arc inversion, extreme scale, frames, G2, nonconvex data, invariants, straight cases, and validation | Port all behavioral intents and add variable-order, dynamic-edit, flat-prefix, closed-monodromy, and scale tests |
 
 The existing `CubicPHSpline` class SHALL remain importable. The package top-level `ph_spline.__init__` SHALL export `PHSpline`, `CubicPHSpline`, and `PHBSpline`; adding the new class MUST NOT make either concrete implementation inherit from the other.
 
@@ -230,7 +249,57 @@ $$
 w\in C^{m-1},\qquad z\in C^m,\qquad \kappa\in C^{m-2}.
 $$
 
-## 3.3 Local span coordinate
+For $N$ open user intervals split once at their midpoints, the reference
+basis has $2N$ polynomial spans and $2N+m$ complex B-spline controls. For a
+closed curve with $N$ cyclic user intervals, it has $2N$ spans and $2N$
+independent complex controls, with the remaining extended controls supplied
+by the seam law below. These counts, the knot multiplicities, and the
+extraction matrices are part of the basis definition; they MUST NOT be
+changed merely to obtain more nonlinear-solver freedom.
+
+## 3.3 Closed preimage monodromy
+
+The curve is closed when its hodograph and integrated displacement close. It
+does **not** follow that the square-root preimage is periodic. The closed
+preimage SHALL carry a monodromy sign
+
+$$
+\eta\in\{+1,-1\},\qquad
+w^{(q)}(t+T)=\eta\,w^{(q)}(t),\quad q=0,\ldots,m-1.
+$$
+
+Thus $\eta=+1$ is periodic and $\eta=-1$ is antiperiodic. Both produce a
+periodic hodograph because $(\eta w)^2=w^2$. More generally, if the tangent
+turning number is $n_T$, a continuous square-root lift has
+$\eta=(-1)^{n_T}$. In particular, every regular simple closed planar curve
+has $n_T=\pm1$ and therefore requires the antiperiodic lift.
+
+Let $n=2N$ be the number of compiled spans and base controls. Closed extended
+controls SHALL obey the twisted cyclic extension
+
+$$
+c_{j+qn}=\eta^q c_j,\qquad 0\le j<n,\quad q\in\mathbb Z.
+$$
+
+Bezier extraction across the seam SHALL apply this sign before wrapped
+columns are collapsed modulo $n$. This rule also covers $m\ge n$, where one
+extraction stencil may wrap more than once. A plain modulo operation is
+correct only when $\eta=+1$.
+
+The seam verifier SHALL compare physical preimage jets with the same sign:
+
+$$
+h_{n-1}^{-q}\frac{d^q w_{n-1}}{d\nu^q}(1)
+=\eta\,
+h_0^{-q}\frac{d^q w_0}{d\nu^q}(0),
+\qquad q=0,\ldots,m-1.
+$$
+
+Ordinary joins use $\eta=+1$. Curve, tangent, speed, curvature, and all
+derived curve jets remain periodic at an antiperiodic seam; the sign belongs
+to the non-observable square-root gauge, not to the geometry.
+
+## 3.4 Local span coordinate
 
 For a knot span $[\tau_i,\tau_{i+1}]$, define
 
@@ -255,7 +324,7 @@ $$
 
 All runtime span kernels SHALL use $\nu\in[0,1]$. No evaluator SHALL form a high-degree global power polynomial in an unscaled global parameter.
 
-## 3.4 Bernstein product formula
+## 3.5 Bernstein product formula
 
 For degree-$m$ Bernstein coefficients $b_a$, the degree-$2m$ hodograph coefficients are
 
@@ -278,7 +347,7 @@ $$
 
 The imaginary part of each computed $r_k$ SHALL be checked against a rounding bound and discarded only after that check. Silent conversion of a materially complex speed coefficient to real is forbidden.
 
-## 3.5 Bernstein antiderivative
+## 3.6 Bernstein antiderivative
 
 For a degree-$d$ Bernstein polynomial
 
@@ -350,12 +419,38 @@ regularity SHALL be obtained by inserting simple knots, not by increasing the
 polynomial degree beyond the continuity requirement. The object MUST report
 both the selected preimage degree and curve degree.
 
+This rule follows from the simple-knot continuity chain and is not a tuning
+heuristic:
+
+- $w\in C^{m-1}$ implies $z'=w^2\in C^{m-1}$ and hence $z\in C^m$;
+- a regular $C^{m-1}$ preimage gives $\kappa\in C^{m-2}$;
+- oriented $G^r$ requires tangent agreement and arc-length curvature
+  derivatives through order $r-2$, so $m\ge r$ suffices;
+- parametric $C^r$ requires $m\ge r$;
+- curvature $C^k$ requires $m\ge k+2$.
+
+Therefore the maximum in $r_*$ is the least preimage degree that satisfies
+all three requested guarantees under the reference simple-knot construction,
+subject to the intentional floor $m\ge2$. A higher degree is not needed to
+impose the constraints. The apparently spare coefficients are shape and
+interpolation degrees of freedom; they SHALL be supplied by the midpoint
+knot topology and selected by the deterministic guide projection. Higher
+preimage derivatives SHALL NOT be arbitrarily set to zero as a substitute for
+choosing the correct degree.
+
 The reference construction inserts one simple knot at the parameter midpoint
 of every user interval. Consequently, each user interval contains two
 compiled polynomial spans. A simple knot preserves generic $C^{m-1}$
 preimage continuity while supplying one additional complex control degree of
 freedom per interval; exact PH displacement constraints retain interpolation
 at the user knots.
+
+**Counterexample (over-degree construction).** Selecting $m=2r+1$ for a
+$G^r$ request does not create a stronger requirement; it introduces
+unconstrained high-order shape modes, increases span degree from $2r+1$ to
+$4r+3$, worsens endpoint-difference conditioning, and makes every query more
+expensive. Setting those extra modes to zero merely hides the incorrect basis
+choice. Conformance tests require `preimage_degree == r_*`.
 
 Examples:
 
@@ -600,7 +695,11 @@ The no-keyword call `curvature_vector(u)` retains the `CubicPHSpline` order-zero
 
 At a join, `side="left"` or `side="right"` requests that one-sided value. With `side="auto"`, the evaluator SHALL return a common value only when the relevant left/right jets agree within their independently computed error bounds; otherwise it raises `DiscontinuousDerivativeError`. At an open endpoint, `auto` selects the interior side and an explicitly unavailable side is invalid. Away from a join, `side` does not change the result.
 
-The global compatibility parameter `u` is in `[0, 1]`. It is derived from the dynamic parameter-weight tree. A local geometry edit can therefore change the normalized `u` assigned to downstream geometry even when that geometry is spatially unchanged. Applications requiring edit-stable references SHALL use `CurveLocation` or `PointHandle`.
+The global compatibility parameter `u` is in `[0, 1]`. It is derived from the
+compensated flat prefix of parameter weights. A local geometry edit can
+therefore change the normalized `u` assigned to downstream geometry even when
+that geometry is spatially unchanged. Applications requiring edit-stable
+references SHALL use `CurveLocation` or `PointHandle`.
 
 For an open spline, `u=0` and `u=1` are the two endpoints. For a closed spline, `u=0` and `u=1` denote the same seam point and frame; `arc_length(0)=0` and `arc_length(1)=length`. Exact seam queries SHALL not choose inconsistent left/right branches.
 
@@ -623,7 +722,12 @@ def advance_by_length(self, location: CurveLocation, ds: Real) -> CurveLocation:
 def point_after_length(self, location: CurveLocation, ds: Real) -> NDArray[np.float64]: ...
 ```
 
-`advance_by_length` is REQUIRED because a global binary64 distance cannot resolve every small local increment when total length is extremely large. It SHALL perform relative tree traversal without first forming `global_s + ds` in one float. `point_after_length(location, ds)` SHALL be equivalent to `point(advance_by_length(location, ds))`; the name deliberately avoids confusion with a geometric normal offset curve.
+`advance_by_length` is REQUIRED because a global binary64 distance cannot
+resolve every small local increment when total length is extremely large. It
+SHALL traverse spans sequentially from the supplied location without first
+forming `global_s + ds` in one float. `point_after_length(location, ds)` SHALL
+be equivalent to `point(advance_by_length(location, ds))`; the name
+deliberately avoids confusion with a geometric normal offset curve.
 
 `distance_between` semantics are exact and SHALL be:
 
@@ -658,9 +762,14 @@ def points_at_length(self, s: ArrayLike, *, out: NDArray[np.float64] | None = No
 def parameters_at_length(self, s: ArrayLike, *, out: NDArray[np.float64] | None = None, assume_sorted: bool = False) -> NDArray[np.float64]: ...
 ```
 
-For sorted distances, the implementation SHALL use a linear span walk rather than one tree search per query.
+For sorted distances, the implementation SHALL use a linear span walk rather
+than one binary search per query.
 
-The derivative batch methods accept one common order and return `u.shape + (2,)`. They SHALL group queries by span, reuse compiled derivative ladders, and avoid scalar Python dispatch per element. Their scalar validation, join-side semantics, and numerical acceptance rules are identical to the corresponding scalar methods.
+The derivative batch methods accept one common order and return
+`u.shape + (2,)`. The reference profile dispatches each element through the
+scalar verified kernel; grouping by span and shared derivative ladders is a
+future throughput optimization. Scalar validation, join-side semantics, and
+numerical acceptance rules are identical to the corresponding scalar methods.
 
 ## 6.6 Editing methods
 
@@ -699,7 +808,9 @@ def edit(self, *, repair: EditRepair | None = None) -> EditTransaction: ...
 
 Insertion index semantics SHALL match `list.insert`: insert before the current item at `index`; `index == num_points` appends.
 
-Every mutation SHALL be atomic. On any exception, input points, point handles, geometry, metric tree, version, and caches SHALL remain exactly as before the operation.
+Every mutation SHALL be atomic. On any exception, input points, point handles,
+geometry, metric prefixes, version, and caches SHALL remain exactly as before
+the operation.
 
 ## 6.7 Snapshots
 
@@ -707,10 +818,10 @@ Every mutation SHALL be atomic. On any exception, input points, point handles, g
 def snapshot(self, *, compact: bool = False) -> PHBSplineSnapshot: ...
 ```
 
-A snapshot SHALL be immutable and thread-safe for concurrent reads. It SHALL expose the scalar and batch query API but no mutation API.
-
-- `compact=False` MAY use persistent shared tree nodes and shall be at most `O(log N)` after a local edit if persistent nodes are used.
-- `compact=True` SHALL build contiguous span arrays and a flat compensated prefix array in `O(N)`, optimized for repeated static queries.
+A snapshot SHALL be immutable with respect to later source-object edits and
+SHALL expose the scalar and batch query API but no mutation API. The reference
+snapshot retains the already-published immutable spans and arrays for either
+value of `compact`; the flag is reserved for a future storage distinction.
 
 ## 6.8 Stable handles and locations
 
@@ -758,6 +869,14 @@ class ConstructionPolicy:
 
 Random initialization is forbidden in deterministic mode.
 
+In the reference profile, `parameterization`, `max_iterations`, and
+`max_line_search_steps` affect construction. The remaining fields are
+accepted, validated compatibility placeholders for planned shape optimization
+and adaptive refinement; they currently have no effect on the constructed
+curve. An implementation reproducing the reference profile SHALL use the
+guide projection in Section 10.7 and SHALL NOT silently activate a different
+objective because one of these reserved weights is nonzero.
+
 ## 7.2 `EditingPolicy`
 
 ```python
@@ -771,7 +890,14 @@ class EditingPolicy:
     preserve_outside_bitwise: bool = True
 ```
 
-`strict_local` SHALL never silently perform a global rebuild. `expand` may grow the patch up to `max_patch_spans`; after that it fails. `global` may rebuild the entire spline.
+`strict_local` SHALL never silently perform a global rebuild. In the reference
+profile, the geometric patch is always the order-derived patch in Section
+11.3. `initial_patch_spans` and `max_patch_spans` are post-construction
+admission limits, not patch-size selectors; `expand` admits that same patch
+against `max_patch_spans` and does not yet perform repeated geometric growth.
+`global` rebuilds the entire spline. True repeated patch expansion and
+`leaf_capacity` are future extensions and MUST NOT be reported as active by a
+reference-profile implementation.
 
 ## 7.3 `InversePolicy`
 
@@ -788,6 +914,12 @@ class InversePolicy:
     fallback: Literal["itp", "bisection"] = "itp"
     endpoint_reverse_threshold: float = 0.5
 ```
+
+The reference inverse uses `lut_nodes_min`, `lut_nodes_max`,
+`lut_power_of_two`, `fast_iterations`, `max_iterations`, and
+`endpoint_reverse_threshold`. It uses a linear length-within-LUT-cell seed,
+Newton correction, and bisection fallback. `seed_kind`, `use_halley`, and
+`fallback` are reserved compatibility fields in this profile.
 
 ## 7.4 `NumericalPolicy`
 
@@ -813,6 +945,12 @@ Requests requiring a preimage degree above `max_preimage_degree` SHALL raise `Re
 
 `max_evaluation_order` is a resource guard, not a mathematical restriction on the API. Users MAY explicitly increase it. Implementations SHALL reject an order before allocating order-dependent work when it exceeds the configured limit.
 
+The active reference numerical fields are `regularity_ratio_min`,
+`max_preimage_degree`, `max_evaluation_order`,
+`max_regularization_subdivision_depth`, `position_eps_factor`, and
+`reject_unresolved_global_lengths`. Other fields remain public compatibility
+placeholders until the corresponding documented verifier is implemented.
+
 # 8. Internal architecture
 
 ## 8.1 Layer separation
@@ -821,66 +959,58 @@ The package SHALL separate four layers:
 
 1. **Interpolation model:** user points, point handles, continuity request, policies, and optional Hermite constraints.
 2. **Authoritative PH spline:** knot topology and complex preimage coefficients or equivalent compatible span data.
-3. **Compiled span kernels:** position, preimage, speed, arc length, inverse LUT, regularity bounds, and bounding boxes.
-4. **Dynamic indexes:** order-statistic point tree, parameter tree, and arc-length tree.
+3. **Compiled span kernels:** position, preimage, speed, arc length, inverse LUT, and regularity bounds.
+4. **Published indexes:** read-only parameter and compensated arc-length prefix arrays.
 
 A query SHALL never invoke the nonlinear construction solver.
 
-## 8.2 Recommended module layout
+## 8.2 Reference module layout
 
 ```text
 ph_spline/
     __init__.py
-    api.py                  # PHBSpline and PHBSplineSnapshot
-    policies.py             # immutable policy dataclasses
-    types.py                # handles, locations, frames, diagnostics
+    base.py                 # sibling PHSpline abstract base
+    bspline.py              # PHBSpline API, edits, snapshots, geometry queries
+    bspline_types.py        # policies, handles, reports, diagnostics
+    bspline_basis.py        # basis, twisted extraction, exact constraints, solve
+    bspline_construction.py # validation, guide, build, local repair, verification
+    bspline_segment.py      # immutable compiled PH span and inverse kernel
     exceptions.py
-    validation.py
-    knots.py                # knot generation, insertion, removal, extraction
-    bernstein.py            # product, integration, subdivision, bounds
-    preimage.py             # complex B-spline operations
-    construction.py         # initial build orchestration
-    guide.py                # local guide and square-root initializer
-    solver.py               # deterministic sparse/banded SQP
-    continuity.py           # jet generation and verification
-    regularity.py           # nonvanishing certificates
-    span.py                 # immutable compiled span kernel
-    inverse.py              # inverse LUT and safeguarded solve
-    length.py               # double-double arithmetic and tree aggregates
-    tree.py                 # persistent B+ tree / rope
-    editing.py              # local transactions
-    snapshot.py
-    serialization.py
+    arclength.py            # compensated prefix helper shared with cubic
     _constants.py
     py.typed
 ```
 
-Circular imports SHALL be avoided. `span.py`, `inverse.py`, and `length.py` SHALL not import the mutable API layer.
+Circular imports SHALL be avoided. `bspline_basis.py`,
+`bspline_construction.py`, and `bspline_segment.py` SHALL not import the
+mutable API layer.
 
-## 8.3 Dynamic tree
+## 8.3 Reference flat indexes and future dynamic tree
 
-The mutable object SHALL use a balanced B+ tree, rope, or equivalent order-statistic tree. Each internal node SHALL aggregate:
+The reference profile SHALL publish contiguous arrays for user knots,
+midpoint-refined span knots, normalized length prefixes, and physical length
+prefixes. Scalar parameter and distance lookup use binary search and are
+$O(\log M)$. Prefixes SHALL be accumulated by the shared compensated-sum
+helper and SHALL be strictly increasing in both normalized and user
+coordinates when `reject_unresolved_global_lengths=True`.
 
-- number of user points;
-- number of PH spans;
-- parameter-weight sum as double-double;
-- arc-length sum as double-double;
-- subtree bounding box;
-- subtree version/hash information sufficient for persistent snapshots.
+Local edits structurally share unchanged immutable span kernels, but the
+reference implementation validates the complete point array and rebuilds the
+flat parameter and length arrays before atomic publication. This work is
+$O(N)$. Documentation and benchmarks MUST distinguish local nonlinear/span
+work from total edit latency.
 
-Each leaf SHALL contain a bounded block, default 128 spans or an implementation-equivalent block size.
+A balanced augmented tree or rope that reduces publication to $O(\log N)$ is
+a **future extension**. Such a replacement must preserve exact lookup boundary
+semantics, stable handles, snapshot behavior, compensated length totals, and
+all verification gates before it may claim conformance. The earlier statement
+that a flat prefix array was forbidden was aspirational and did not describe
+the tested implementation.
 
-Stable point IDs are not ordered by spline position. The implementation SHALL therefore maintain a point-ID locator table mapping each live `PointHandle.id` to its current leaf record. Hash lookup may be `O(1)` average; deriving the current sequence index from that record and parent subtree counts is `O(log N)`. Leaf split, merge, and compaction operations SHALL update all affected locator entries before commit.
-
-Required complexities for fixed continuity order and bounded patch size:
-
-- locate point handle or index: `O(log N)`;
-- locate parameter span: `O(log N)`;
-- locate distance span: `O(log N)`;
-- update aggregates after a local edit: `O(log N)`;
-- split or merge a leaf: `O(log N)` amortized.
-
-A linked list of spans plus a flat prefix array is insufficient for the mutable class because every local length change would require updating all downstream prefixes.
+Stable handles are stored in sequence order in the reference object. Lookup by
+handle is linear; insertion and deletion preserve every surviving handle's
+identity. A future locator table/tree MAY improve this complexity without
+changing semantics.
 
 ## 8.4 Compiled span kernel
 
@@ -890,65 +1020,58 @@ Each immutable `SpanKernel` SHALL contain at least:
 span_id
 left_point_id / right_point_id or hidden-span metadata
 parameter_width h
-local affine frame (origin, power-of-two scale, optional unit rotation)
 preimage degree m
 preimage Bernstein coefficients b[0:m+1]
+canonical left/right preimage jets through order m-1
 position Bernstein coefficients p[0:2m+2]
 speed Bernstein coefficients r[0:2m+1]
 arc Bernstein coefficients a[0:2m+2]
-forward power coefficients for arc residual evaluation
-reverse power coefficients for endpoint-reversed evaluation
-span length as double-double and rounded float64
+forward and reverse Bernstein arc coefficients
+optional power coefficients for low-degree fast seeds
+span length as float64
 regularity lower and upper bounds
-derivative and curvature-vector jet cache data
 inverse LUT
-axis-aligned bounding box
-verification digest / version
 ```
 
 The arrays SHALL be read-only after construction.
 
 # 9. Coordinate normalization and scaled representation
 
-## 9.1 No mutable global spatial normalization
+## 9.1 Reference global normalization
 
-A single global origin and longest-chord scale, while effective for an immutable object, is unsuitable as the only dynamic representation: moving one point far outside the original scale can force an `O(N)` rebase.
-
-The mutable implementation SHALL therefore solve and compile bounded patches in local affine frames.
-
-## 9.2 Patch frame
-
-For each solve patch, choose:
-
-- origin equal to a fixed patch boundary point or a safe midpoint;
-- spatial scale $H=2^e$, selected with `frexp`/`ldexp` so normalized chords are near unity;
-- an optional unit complex rotation that maps a representative chord toward the positive real axis.
-
-Power-of-two scaling is REQUIRED because it introduces no additional rounding in binary64 exponent adjustment.
-
-The normalized solve SHALL aim to keep all active point coordinates, preimage controls, and derived polynomial coefficients within a moderate exponent range. If that cannot be achieved, raise `NumericalPrecisionError` rather than allow overflow or underflow.
-
-## 9.3 Span frame
-
-A span MAY retain its patch frame or be recompiled into its own local frame. Physical evaluation SHALL use
+The reference constructor uses one affine frame:
 
 $$
-z(\nu)=O_i+H_i R_i\widehat z_i(\nu),
+O=P_0,\qquad H=\max_i\|P_{i+1}-P_i\|_2,
+\qquad \widehat P_i=(P_i-O)/H.
 $$
 
-where $O_i$ is the local origin, $H_i$ a power-of-two scale, and $|R_i|=1$.
+Safe component differences and `hypot`-style chord norms SHALL be used before
+normalization. $H$ must be positive and finite. Construction, compilation,
+regularity certification, and interpolation verification operate in this
+normalized frame; physical positions and lengths are restored with $O$ and
+$H$.
 
-Physical speed and curvature scale as
+## 9.2 Edit-frame stability
+
+Local edits reuse the already-published $(O,H)$ frame so unchanged exterior
+span arrays remain bitwise identical. The reference profile does not perform
+an automatic whole-curve rebase. An edit whose new coordinates cannot be
+represented safely in the retained frame SHALL fail atomically rather than
+overflow or silently rebuild exterior geometry.
+
+Per-patch power-of-two frames are a future extension. They require explicit
+cross-frame boundary-jet conversion and cannot be retrofitted by changing the
+normalization silently.
+
+Physical length and curvature scale as
 
 $$
-\sigma=H_i\widehat\sigma,
-\qquad
-\kappa=\widehat\kappa/H_i.
+L=H\widehat L,
+\qquad \kappa=\widehat\kappa/H.
 $$
 
-All cross-frame join comparisons SHALL be transformed to physical scale before verification.
-
-## 9.4 Endpoint anchoring
+## 9.3 Endpoint anchoring
 
 Every span SHALL store exact references to its structural endpoints. `point(0)`, `point(1)`, and exact interpolation-knot queries SHALL return the stored input point values.
 
@@ -962,16 +1085,24 @@ The constructor SHALL execute the following stages:
 
 1. validate and canonicalize input;
 2. determine continuity request and degree;
-3. assign stable point handles;
-4. generate initial knot/parameter weights;
-5. construct a local ordinary guide curve;
-6. derive a coherent complex square-root preimage initializer;
-7. solve the exact PH displacement constraints with a deterministic constrained nonlinear method;
-8. insert one simple midpoint knot in every user interval;
-9. compile all span kernels;
-10. independently verify all postconditions;
-11. build the dynamic point, parameter, and distance trees;
-12. publish the object only after all stages succeed.
+3. normalize points and construct guarded parameter widths;
+4. construct guide velocity samples and select the square-root seam sign;
+5. build the minimum-degree open or twisted-closed simple-knot basis,
+   including the midpoint of every user interval;
+6. seed its controls by sign-aware interpolation at unwrapped Greville
+   abscissae;
+7. project the seed onto all exact PH displacement constraints;
+8. Bezier-extract every span directly from endpoint basis derivatives;
+9. canonicalize shared endpoint preimage jets and compile immutable span
+   kernels;
+10. independently verify interpolation, signed seam continuity, regularity,
+    and metric postconditions;
+11. build flat parameter and compensated length prefixes;
+12. assign handles and publish only the complete verified state.
+
+The midpoint basis is therefore built **before** the nonlinear solve. Solving
+on one topology and inserting midpoint knots afterwards is not the reference
+algorithm and changes both the unknown count and the constraint Jacobian.
 
 No partially initialized public object may escape.
 
@@ -983,31 +1114,73 @@ For chord lengths $d_i>0$, initial span weights SHALL be:
 - chord: $h_i\propto d_i$;
 - centripetal: $h_i\propto\sqrt{d_i}$.
 
-Weights SHALL be computed with exponent-scaled norms and normalized using compensated summation. No positive weight may round to zero. If the dynamic range prevents a strictly increasing binary64 compatibility parameter, the tree SHALL retain extended sums and `CurveLocation` remains authoritative.
+Weights SHALL be positive and finite. For required order $m>1$, the reference
+profile limits the adjacent/global parameter-width dynamic range before
+forming high-order physical jets:
+
+$$
+R_m=(10^8)^{1/(m-1)},\qquad
+h_i\leftarrow\max\left(h_i,\frac{\max_jh_j}{R_m}\right).
+$$
+
+This changes only parameter allocation, not input geometry or exact
+interpolation. It bounds factors of the form $h^{-(m-1)}$ that would otherwise
+make high-order seam and patch jets numerically unrepresentable. Prefixes are
+formed by compensated summation and the normalized public knots must remain
+strictly increasing.
 
 ## 10.3 Guide construction
 
-The guide exists only to choose a good PH branch and fairness target. It is not authoritative geometry.
+The guide exists only to choose a square-root branch and initialize the
+projection. It is not authoritative geometry. Define interval secants
 
-For each interpolation point, the implementation SHALL use a bounded local stencil and one of:
+$$
+d_i=\frac{P_{i+1}-P_i}{h_i}.
+$$
 
-- scaled local polynomial least squares solved by QR with column pivoting;
-- centripetal Catmull-Rom derivatives with explicit reversal fallback;
-- another deterministic local method with equivalent tested robustness.
+At an interior point, including every point of a closed curve, use
 
-The guide SHALL provide tangent direction and speed samples at preimage Greville abscissae. Near a zero guide derivative, the implementation SHALL choose a deterministic fallback direction from adjacent nonzero chords. At an exact reversal, it SHALL choose a side using local signed area, the previous coherent branch, or a fixed documented tie-breaker. It SHALL NOT divide by an unguarded tangent norm.
+$$
+v_i=\frac{h_i d_{i-1}+h_{i-1}d_i}{h_{i-1}+h_i}.
+$$
+
+For an open curve use $v_0=d_0$ and $v_{N}=d_{N-1}$. If the weighted average
+has norm no greater than $32\epsilon\max(|d_{i-1}|,|d_i|)$, replace it by the
+larger adjacent secant, with the later secant winning only when it is
+strictly larger. This deterministic reversal fallback avoids an artificial
+zero guide speed.
 
 ## 10.4 Square-root branch initializer
 
-For a guide derivative $g'(t)=v(t)e^{i\theta(t)}$, initialize
+For each guide velocity $v_i$, compute one principal complex square root
+$r_i=\sqrt{v_i}$. For an open curve choose signs greedily so consecutive
+roots have minimum Euclidean distance.
+
+For a closed curve, greediness is insufficient because the end condition is
+cyclic. The implementation SHALL solve both monodromy cases
+$\eta\in\{+1,-1\}$ by a deterministic two-state dynamic program. With
+$s_i\in\{+1,-1\}$, minimize
 
 $$
-w(t)\approx \sqrt{v(t)}e^{i\theta(t)/2}.
+\sum_{i=1}^{N-1}|s_i r_i-s_{i-1}r_{i-1}|^2
++|s_{N-1}r_{N-1}-\eta r_0|^2.
 $$
 
-Angles SHALL be unwrapped before halving. The sign of each square root SHALL be selected to minimize the distance to the previous preimage sample, producing a coherent branch. Closed curves require a cyclic sign-consistency check; if the branch closes with opposite sign, the initializer SHALL insert or choose a branch transition compatible with the curve hodograph, not silently introduce a discontinuity.
+Choose the lower-cost pair `(sign sequence, eta)`; exact ties SHALL prefer
+$\eta=+1$. The chosen $\eta$ is stored as authoritative topology and used by
+basis extraction, Greville seeding, seam canonicalization, verification, and
+wrapped local edits. It is not a disposable initializer detail.
 
-The samples SHALL be fitted to B-spline controls using a scaled banded least-squares solve.
+The guide roots are linearly interpolated in the complex plane at the basis
+Greville abscissae. For a closed basis the Greville values SHALL remain
+unwrapped. If $x=qT+\bar x$, evaluate the seed as
+
+$$
+c^{(0)}(x)=\eta^q\operatorname{lerp}\bigl(r(\bar x)\bigr).
+$$
+
+Reducing the abscissa modulo $T$ without the factor $\eta^q$ is incorrect for
+an antiperiodic basis.
 
 ## 10.5 Exact interpolation constraints
 
@@ -1034,6 +1207,19 @@ where $\mathcal S_i$ contains the visible and hidden spans between the two user 
 
 These are two real equations per input interval. Their support is local in the preimage control ordering.
 
+In the reference topology, $\mathcal S_i$ contains exactly the two midpoint
+subspans. If $b_0,\ldots,b_m$ are the extracted Bernstein controls on one
+subspan, the integral is evaluated with the analytic Bernstein Gram matrix
+
+$$
+G_{ab}=\int_0^1B_a^m(\nu)B_b^m(\nu)d\nu
+=\frac{\binom ma\binom mb}
+{(2m+1)\binom{2m}{a+b}},
+$$
+
+so its displacement contribution is $h\,b^TGb$. No quadrature or sampled
+constraint is permitted.
+
 ## 10.6 Analytic Jacobian
 
 For a local Bezier preimage coefficient $b_k=x_k+i y_k$:
@@ -1052,48 +1238,51 @@ For global B-spline controls, multiply by the Bezier extraction matrix. All inte
 
 Finite-difference Jacobians are forbidden in the production solver. Complex-step differentiation MAY be retained as an independent debug/test oracle, as in the baseline package.
 
-## 10.7 Shape objective
+## 10.7 Reference shape selection
 
-The constrained solver SHALL minimize a deterministic local objective while satisfying the displacement constraints. The default objective SHALL include:
+The reference profile does not run a separate elastica, strain, length, or
+curvature optimizer. Shape is selected by starting at the deterministic guide
+controls and repeatedly applying the minimum-Euclidean-norm linearized
+constraint correction. Equivalently, each full-construction step solves
 
 $$
-J(c)=
-\lambda_g\|W_g(c-c_0)\|_2^2
-+
-\lambda_s\int |D_t^2w(t)|^2\,dt
-+
-\lambda_v J_{\rm speed}(c).
+\min_{\delta c}\|\delta c\|_2
+\quad\text{subject to}\quad
+J_F\delta c=-F.
 $$
 
-The first term retains the guide branch. The second is an exact quadratic preimage-strain energy. `J_speed` MAY use fixed-order Gauss-Legendre samples because it is a shape objective, not authoritative arc-length computation.
-
-The objective MUST NOT override interpolation, continuity, or regularity constraints.
+This local projection keeps the converged branch near the guide without
+introducing additional objective weights. The public `shape_objective` and
+shape-weight fields are reserved in this profile. Activating a fairness
+objective changes the specified curve and requires a new documented profile
+and new regression fixtures.
 
 ## 10.8 Nonlinear method
 
-The recommended method is deterministic sparse sequential quadratic programming or equality-constrained trust-region Gauss-Newton. At each iteration solve a scaled KKT system of the form
+For a full open or closed construction, form the real constraint Jacobian
+$J_F$ and solve on the smaller constraint space:
 
 $$
-\begin{bmatrix}
-H+\mu I & J^T\\
-J & 0
-\end{bmatrix}
-\begin{bmatrix}\delta c\\\delta\lambda\end{bmatrix}
-=
--\begin{bmatrix}\nabla_c\mathcal L\\F\end{bmatrix}.
+J_FJ_F^T\lambda=-F,
+\qquad \delta c=J_F^T\lambda.
 $$
 
-Requirements:
+Try deterministic relative diagonal damping values
+$0,10^{-15},10^{-13},10^{-11},10^{-9}$, scaled by
+$\max(1,\|J_FJ_F^T\|_{\max})$, until a finite sparse solve is obtained. Apply
+bounded backtracking factors $1,1/2,1/4,\ldots$ and accept only a finite trial
+whose real residual 2-norm is strictly smaller.
 
-- variables SHALL be ordered by knot support so the matrix has fixed bandwidth for fixed degree;
-- the factorization SHALL exploit banded or sparse structure;
-- row and column scaling SHALL be applied;
-- the trust-region or damping parameter SHALL be bounded and deterministic;
-- every step SHALL be checked for finite values;
-- line search SHALL use a fixed maximum number of steps;
-- no solver flag is sufficient for acceptance;
-- the iteration count SHALL be hard bounded;
-- the final candidate SHALL pass the independent verifier.
+For a local edit patch, impose each exterior endpoint preimage jet through
+order $m-1$ by directly solving the clamped endpoint extraction block and
+eliminate those controls from the unknown vector. Solve the remaining small
+system $J_{F,\mathrm{free}}\delta c=-F$ with rank-revealing dense least
+squares. This deliberately avoids forming normal equations for high-order
+endpoint-constrained patches, which would square their condition number.
+
+All paths SHALL use analytic residuals/Jacobians, finite checks, hard
+iteration and line-search bounds, and independent post-verification. A solver
+success flag alone is never acceptance.
 
 For fixed degree, bounded refinement, and bounded iterations, initial construction is `O(N)` in point count.
 
@@ -1106,17 +1295,40 @@ $m=r_*$. All extraction SHALL be performed directly from endpoint basis jets;
 an ill-conditioned Bernstein collocation inverse is not acceptable for
 high-order requests.
 
+For each nonzero span, evaluate all active B-spline basis derivatives through
+order $m$ at the left endpoint using the standard triangular basis-derivative
+recurrence. Convert that Taylor jet to Bernstein coefficients with the exact
+finite basis transformation. For a closed basis, apply the twisted extension
+$c_{j+qn}=\eta^q c_j$ to every wrapped extraction column before combining
+equal base indices.
+
+After extraction, the two independently rounded representations of a shared
+knot jet SHALL be replaced by one canonical physical value. Map the right
+value into the left gauge using the join sign, average after magnitude scaling
+to avoid overflow/cancellation, and store the same physical jet back on both
+sides with their local-width factors. At the closed seam the join sign is
+$\eta$; at every other join it is $+1$.
+
 If this topology cannot satisfy the interpolation residual or regularity
 certificate, construction SHALL raise the corresponding typed error. It MUST
 NOT increase $m$, reduce continuity, or accept a near-cusp. A future adaptive
 simple-knot refinement policy MAY add further local knots without changing
 $m$, provided the actual hidden-span count is reported.
 
+**Counterexample (collocation extraction).** Solving for a Bernstein
+extraction matrix from sampled basis values can be adequate at low order but
+becomes ill-conditioned at G8: a few input ulps are amplified into visible
+join residuals. Direct endpoint-derivative extraction plus canonical shared
+jets removes this avoidable numerical disagreement.
+
 # 11. Local editing
 
 ## 11.1 Transaction model
 
-Every edit SHALL operate on a private candidate tree and candidate span kernels. Commit consists of one atomic root/version replacement. On failure, the candidate is discarded.
+Every edit SHALL construct private candidate points, span tuple, prefixes, and
+diagnostics. Commit publishes the complete candidate and increments the
+version only after verification. On failure, points, handles, span objects,
+prefixes, version, and caches remain unchanged.
 
 A transaction may batch multiple point changes:
 
@@ -1127,7 +1339,8 @@ with curve.edit(repair="strict_local") as tx:
     tx.delete_point(handle_c)
 ```
 
-The union of affected neighborhoods SHALL be solved once when practical.
+The union of affected neighborhoods is solved once by the reference
+transaction.
 
 ## 11.2 Locality invariant
 
@@ -1158,12 +1371,38 @@ The initial patch SHALL include:
 
 With one midpoint knot per input interval, an interior patch with both
 exterior jets fixed needs at least $m$ logical intervals for constraint
-closure. The reference default uses $m+3$ logical intervals, hence
+closure. This count follows from the complex unknowns: a clamped patch of
+$K$ logical intervals has $2K+m$ controls; fixing $m$ controls at each end
+leaves $2K-m$ controls for $K$ complex displacement constraints, so
+$2K-m\ge K$ requires $K\ge m$. The reference default uses three additional
+guard intervals, $K=m+3$, for guide shape freedom and regularity margin, hence
 $2(m+3)$ compiled spans. It therefore rebuilds 10, 14 and 22 spans for G2,
 G4 and G8 respectively. The count depends on requested order; a fixed count
 independent of $m$ is not a valid general rule.
 
-## 11.4 Move operation
+For open curves, grow the shortest contiguous interval containing every
+changed displacement until it reaches $K$, preferring the left side and then
+the right side on each growth pass where available. For closed curves, cut
+the cycle through the largest unchanged gap, then grow the resulting cyclic
+patch alternately left and right. A local closed patch must leave at least one
+certified exterior interval; otherwise strict-local reconstruction fails.
+
+## 11.4 Closed wrapped-patch gauge
+
+A closed local patch is solved as an ordinary clamped open preimage in a
+continuous lifted gauge. If the patch crosses the stored seam, its right
+boundary physical jets SHALL be multiplied by every crossed monodromy factor
+$\eta$. After the patch solve, extracted preimages on the portion lying after
+the seam are multiplied by $\eta$ to return them to the global stored gauge.
+This sign change leaves $w^2$, $|w|^2$, positions, speed, and arc length
+unchanged.
+
+Verification SHALL cover every join adjacent to a rebuilt span, including
+both patch/exterior boundaries and the closed seam, using sign $\eta$ only at
+the global seam. Checking the clamped patch internally while omitting its
+wrapped exterior joins is insufficient.
+
+## 11.5 Move operation
 
 `move_point` SHALL:
 
@@ -1174,48 +1413,54 @@ independent of $m$ is not a valid general rule.
 5. freeze exterior controls/jets;
 6. solve and verify the patch;
 7. recompile affected spans and inverse kernels;
-8. update tree aggregates on the path to the root;
+8. assemble and validate new flat parameter/length prefixes;
 9. commit and increment `version`.
 
-## 11.5 Insert operation
+## 11.6 Insert operation
 
 `insert_point(index, value)` SHALL:
 
 1. identify the old input interval being split;
 2. assign a new stable point ID;
-3. choose an initial parameter split from adjacent chord lengths with scaled arithmetic;
-4. insert the corresponding preimage knot exactly, preserving the old curve as a seed;
-5. replace one displacement constraint by two;
-6. solve and verify a bounded patch;
-7. split tree leaves if necessary;
-8. commit atomically.
+3. recompute the affected parameter widths from the configured rule;
+4. replace one displacement constraint by two;
+5. construct the order-derived clamped patch and guide seed;
+6. solve and verify the patch;
+7. assemble prefixes and commit atomically.
 
 Insertion MUST NOT renumber existing point handles.
 
-## 11.6 Delete operation
+## 11.7 Delete operation
 
 `delete_point` SHALL:
 
 1. reject deletion if it would leave too few points;
 2. merge the two adjacent displacement constraints into one;
-3. remove or mark the interpolation knot and generate a seed using stable knot removal or local least-squares projection;
+3. recompute affected parameter widths and construct the clamped patch guide;
 4. solve and verify the bounded patch;
-5. merge underfull tree leaves when appropriate;
+5. assemble prefixes;
 6. invalidate the deleted handle only after commit.
 
-## 11.7 Edit complexity contract
+## 11.8 Edit complexity contract
 
-For fixed continuity order, fixed degree, fixed maximum hidden spans, and `strict_local` repair:
+For fixed continuity order and the reference patch $K=2(m+3)$ compiled spans,
+the nonlinear solve and span compilation cost is bounded independently of
+total point count. The current total edit cost is nevertheless
 
 $$
-T_{\rm edit}=O(\log N)+O(Km^3I),
+T_{\rm edit}=O(N)+O(Km^3I),
 $$
 
-where $K$ is bounded by `max_patch_spans` and $I$ by the iteration cap. Therefore the edit is `O(log N)` with respect to total point count. `C_eval(m)` denotes the span-evaluation cost: conservatively `O(m^2)` for de Casteljau and `O(m)` for an accepted stable Horner/Bernstein evaluator. All advertised scaling in `N` assumes the requested continuity order, and hence $m$, is fixed.
+because the reference implementation validates/normalizes the whole point
+sequence, assembles the full span tuple, and rebuilds flat parameter and
+length prefixes. A future tree profile may reduce the publication term to
+$O(\log N)$, but that complexity MUST NOT be attributed to this profile.
 
 This bound is obtained by allowing failure. If the strict patch has no verified solution, `LocalEditFailure` SHALL be raised and the object SHALL be unchanged.
 
-For `expand`, the patch grows geometrically. Typical work remains local, but worst-case complexity is `O(N)`. For `global`, `O(N)` is explicit.
+In this profile, `expand` changes the patch admission limit but does not retry
+with progressively larger geometry; `global` performs an explicit full
+solve. True geometric expansion is a future extension.
 
 No documentation may claim unconditional `O(1)` or `O(log N)` successful editing for arbitrary point displacement without stating this policy distinction.
 
@@ -1231,13 +1476,16 @@ $$
 
 throughout the closed span, with a quantitative margin. Sampling alone is insufficient.
 
-## 12.2 Bernstein convex-hull certificate
+## 12.2 Recursive Bernstein-box certificate
 
-A Bezier polynomial lies in the convex hull of its control points. For each preimage span:
+A Bezier polynomial lies in the convex hull of its control points and hence
+inside their axis-aligned complex-plane bounding box. The reference
+certificate deliberately uses the cheaper box distance, which is a
+conservative lower bound on convex-hull distance. For each preimage span:
 
-1. compute the convex hull of the complex Bernstein controls in $\mathbb R^2$;
-2. compute the distance $d$ from the origin to that hull;
-3. if $d>0$ by a certified rounding margin, then $|w(\nu)|\ge d$;
+1. compute the minimum axis-aligned box containing its complex Bernstein controls;
+2. compute the Euclidean distance $d$ from the origin to that box;
+3. if $d>0$, then $|w(\nu)|\ge d$ on that subspan;
 4. otherwise subdivide the preimage by de Casteljau at $\nu=1/2$ and repeat;
 5. stop when all subspans are certified or the subdivision-depth limit is reached.
 
@@ -1254,7 +1502,7 @@ $$
 The span SHALL satisfy
 
 $$
-\rho>\rho_{\min},
+\rho\ge\rho_{\min},
 $$
 
 with default $\rho_{\min}=10^{-12}$. This protects distance inversion and curvature evaluation from near-cuspidal conditioning.
@@ -1292,28 +1540,26 @@ S_r(v)=\int_0^v h|w(1-q)|^2dq
        =L-S_f(1-v).
 $$
 
-`S_r` SHALL be compiled directly from reversed coefficients. Near the right endpoint, inversion and residual checks SHALL use $S_r$ and target $L-s$, never a subtraction of two nearly equal forward lengths.
+`S_r` SHALL be stored as the Bernstein sequence $L-S_f(1-v)$, formed once at
+span compilation. Near the right endpoint, inversion and residual checks
+SHALL use $S_r$ and target $L-s$, never a runtime subtraction of two nearly
+equal forward lengths.
 
 ## 13.3 Polynomial evaluation strategy
 
-Each span SHALL store Bernstein arc coefficients and MAY store power coefficients for speed. Evaluation SHALL use this hierarchy:
-
-1. FMA Horner on forward or reverse power coefficients when the compiled condition estimate is acceptable;
-2. compensated Horner if FMA is unavailable;
-3. de Casteljau on Bernstein coefficients when cancellation or overflow risk exceeds policy;
-4. scaled exponent arithmetic if a physical scale is extreme.
-
-The implementation SHALL precompute a conservative absolute evaluation-error bound.
+Each span SHALL store forward/reverse Bernstein arc coefficients. The
+authoritative forward and reverse evaluations use de Casteljau. For curve
+degree at most 17 the compiler also stores power coefficients used only by
+the unverified fast inverse seed; if a fast speed result is nonpositive or
+nonfinite, the kernel immediately evaluates $h|w|^2$ instead.
 
 ## 13.4 Length aggregation
 
-Span lengths SHALL be aggregated in double-double form using error-free transformations such as `TwoSum` and `FastTwoSum`. Every tree aggregate stores `(hi, lo)` with
-
-$$
-\text{value}=hi+lo.
-$$
-
-The compatibility `length` property returns the correctly rounded or best available binary64 `hi + lo`. `length_coordinate` returns both parts.
+Span lengths SHALL be aggregated into a flat binary64 prefix with Neumaier
+compensation. Both normalized and user-space prefixes must be finite and
+strictly increasing. The reference `LengthCoordinate` interface currently
+returns `(hi=value, lo=0)` and is API scaffolding, not a claim of implemented
+double-double storage. Double-double tree aggregation is a future extension.
 
 # 14. Random distance access
 
@@ -1322,12 +1568,14 @@ The compatibility `length` property returns the correctly rounded or best availa
 `location_at_length(s)` SHALL perform:
 
 1. validate and canonicalize `s` as float or `LengthCoordinate`;
-2. search the augmented length tree for the containing span in `O(log N)`;
-3. compute the local target without catastrophic cancellation using double-double subtraction;
-4. normalize to $\xi=s_{\rm local}/L\in[0,1]$;
-5. select a per-span LUT cell in constant time;
-6. evaluate a monotone inverse seed;
-7. apply safeguarded Halley or Newton correction;
+2. divide by the global spatial scale and binary-search the normalized flat
+   prefix for the containing span in $O(\log M)$;
+3. subtract the normalized prefix to obtain the local target;
+4. binary-search the span's monotone LUT length samples;
+5. linearly interpolate a parameter seed inside that LUT bracket;
+6. apply bracketed Newton correction;
+7. use bisection whenever the Newton proposal is nonfinite or leaves the
+   bracket;
 8. verify the forward or reverse arc residual;
 9. return `CurveLocation(span_id, local_u, version)`.
 
@@ -1335,48 +1583,31 @@ The compatibility `length` property returns the correctly rounded or best availa
 
 ## 14.2 Per-span inverse LUT
 
-For normalized arc map
+At construction, choose a power-of-two node count between policy limits from
+the certified preimage variation estimate
 
 $$
-F(\nu)=\frac{S_f(\nu)}{L},\qquad F:[0,1]\to[0,1],
+V=\max\left(1,\frac{d_{\max}}{\max(d_{\min},10^{-300})}\right),
+\qquad M_0=\max\left(M_{\min},\left\lceil4+2\sqrt V\right\rceil\right).
 $$
 
-build a table at construction time with uniformly spaced distance nodes
+If power-of-two LUTs are requested, round $M_0$ upward to the next power of
+two, then set $M=\min(M_{\max},M_0)$. Thus the resource cap is authoritative
+even when the variation heuristic requests more nodes.
 
-$$
-\xi_j=\frac{j}{M},\qquad j=0,\ldots,M,
-$$
+Store uniformly spaced parameter nodes $\nu_j=j/M$ and the directly evaluated
+monotone arc values $S_f(\nu_j)$. Force the two endpoint entries to exactly
+zero and $L$, and reject a non-strictly-increasing table. Runtime cell
+selection is a binary search in stored arc values. The LUT supplies a bracket
+and seed only; authoritative acceptance uses Bernstein arc evaluation.
 
-where $M$ is a power of two between policy limits. For each node store:
+## 14.3 Linear bracket seed
 
-- $\xi_j$;
-- the verified inverse $\nu_j$;
-- inverse slope
-  $$
-  \frac{d\nu}{d\xi}=\frac{L}{h|w(\nu_j)|^2};
-  $$
-- optional second-derivative data;
-- the exact bracket $[\nu_j,\nu_{j+1}]$.
-
-Uniform distance nodes permit cell selection by a multiply and integer clamp. Node inverses SHALL be generated sequentially with a bracketed ITP or bisection/Newton solve, reusing the previous node as the next lower bracket; every node is accepted by the same forward/reverse residual rule used at runtime.
-
-The table size SHALL be increased until the seed-quality criterion is met or the maximum is reached. For each cell, compile certified Bernstein bounds
-
-$$
-m_1 \le F'(u),\qquad |F''(u)|\le M_2.
-$$
-
-A recommended fast-path criterion is
-
-$$
-\frac{M_2\,\Delta u}{m_1}\le 0.25,
-$$
-
-where $\Delta u$ is the cell bracket width, together with successful one-correction tests at the cell midpoint and two interior Chebyshev points. The inequality is a conditioning/performance criterion, not a correctness requirement; failure at `lut_nodes_max` SHALL mark the span as `slow_inverse` and retain the fully safeguarded fallback.
-
-## 14.3 Monotone cubic seed
-
-The default seed SHALL be a monotone cubic Hermite interpolation of $\nu(\xi)$. Endpoint slopes SHALL be limited by a Fritsch-Carlson or equivalent monotonicity rule. The seed MUST lie within the table bracket; otherwise it is clamped to the bracket midpoint and a diagnostic counter is incremented.
+Linearly interpolate $\nu$ between the two LUT arc values bracketing the
+target. The result lies inside the bracket by construction. For curve degree
+at most 17, the reference kernel MAY apply `fast_iterations` unverified Horner
+Newton steps as a seed improvement, but those steps SHALL NOT alter the LUT
+bracket or satisfy the final acceptance gate.
 
 The LUT is an accelerator, not an authority. An inaccurate seed cannot compromise correctness because the subsequent solver remains bracketed.
 
@@ -1389,27 +1620,16 @@ f(\nu)=S(\nu)-s_{\rm local},\qquad
 f'(\nu)=h|w(\nu)|^2,
 $$
 
-and compute $f''$ analytically from the preimage. The Halley proposal is
+with the corresponding reverse definitions when solving from the right.
 
-$$
-\nu_H=\nu-
-\frac{2ff'}{2(f')^2-ff''}.
-$$
-
-The proposal SHALL be rejected in favor of Newton if:
-
-- any operand is nonfinite;
-- the denominator is nonpositive or too small by a scaled bound;
-- the step leaves the current bracket;
-- the predicted step is not a descent step.
-
-The Newton proposal is
+The reference Newton proposal is
 
 $$
 \nu_N=\nu-\frac{f}{f'}.
 $$
 
-It SHALL be rejected in favor of ITP or bisection if nonfinite, outside the bracket, or if the evaluated residual fails to decrease.
+It SHALL be replaced by the bracket midpoint if nonfinite or outside the
+current bracket.
 
 The bracket SHALL be updated after every evaluation. Iteration SHALL have a hard maximum. Failure to satisfy the residual bound raises `ArcLengthInversionError`; an unverified parameter is never returned.
 
@@ -1427,16 +1647,16 @@ Recover $\nu=1-v$ only after the reversed solve. Exact endpoints SHALL return `0
 
 ## 14.6 Residual tolerance
 
-Let $\epsilon$ be binary64 machine epsilon and $E_S$ the conservative arc-evaluation error bound. Accept only if
+Let $\epsilon$ be binary64 machine epsilon. Accept only if
 
 $$
 |S(\nu)-s_{\rm local}|\le
-64\epsilon L+4\operatorname{ulp}(s_{\rm local})+2E_S.
+64\epsilon L+4\operatorname{ulp}(s_{\rm local}).
 $$
 
 For reversed evaluation, use the corresponding reversed target and error bound.
 
-The parameter error estimate SHALL be reported or internally bounded by
+For analysis, the corresponding parameter error is bounded approximately by
 
 $$
 |\delta\nu|\lesssim
@@ -1445,9 +1665,18 @@ $$
 
 ## 14.7 Global length resolution
 
-A binary64 scalar cannot distinguish two global distances separated by less than one ULP of the accumulated prefix. The implementation SHALL detect this condition.
+A binary64 scalar cannot distinguish two global distances separated by less
+than one ULP of the accumulated prefix. The reference implementation detects
+this at construction/edit publication by requiring every physical prefix
+increment to be strictly positive when
+`reject_unresolved_global_lengths=True`.
 
-When policy rejects unresolved global lengths, an ambiguous scalar query SHALL raise `LengthResolutionError` and recommend:
+If the condition fails, construction/edit SHALL raise
+`LengthResolutionError`; it does not publish a curve with ambiguous scalar
+prefixes. Relative `advance_by_length` traversal remains useful because it
+works from one local span and does not first form a large global sum.
+
+A future double-double index may instead retain the curve and recommend:
 
 - `LengthCoordinate` input;
 - `advance_by_length` from a local location;
@@ -1479,7 +1708,12 @@ D_\nu^r z(\nu)=h
 D_\nu^j w(\nu)\,D_\nu^{r-1-j}w(\nu).
 $$
 
-The span compiler SHALL construct derivative Bernstein ladders in its normalized local frame. Runtime evaluation SHALL use scaled de Casteljau, or a demonstrably equivalent compensated Bernstein evaluator, on those ladders. The first derivative SHALL use the direct $h w^2$ expression. For higher orders, the compiler SHALL retain the direct curve-control ladder and MAY retain the preimage Leibniz ladder; the runtime kernel SHALL use the route with the tighter precomputed forward-error bound. Finite differences, generic polynomial differentiation at query time, and conversion to a high-degree global power basis are forbidden.
+The reference runtime evaluates $D_\nu^j w$ from finite Bernstein-difference
+ladders and uses the PH Leibniz identity for every parameter derivative of
+positive order. Endpoint requests use the canonical stored preimage jets when
+available. This avoids cancellation in high-order position-control
+differences. Finite differences and generic polynomial root/differentiation
+routines are forbidden.
 
 For the global B-spline parameter $t$, the local affine map gives
 
@@ -1487,7 +1721,20 @@ $$
 D_t^r z=h^{-r}D_\nu^r z.
 $$
 
-If the compatibility parameter is normalized by the parameter-weight total, its additional affine factor SHALL be applied by the dispatcher. Products such as $h^{-r}$ and falling factorials MUST NOT be formed naively. Accumulate scale factors as mantissa plus binary exponent and restore them with checked `ldexp`; use ratio recurrences so an overflowing intermediate cannot corrupt a representable final result.
+If $H_t=\sum_i h_i$ is the unnormalized parameter total and $H_x$ the spatial
+normalization scale, the public normalized-parameter derivative for $r\ge1$
+is evaluated as
+
+$$
+D_u^r z=
+H_xH_t\left(\frac{H_t}{h_i}\right)^{r-1}
+\sum_{j=0}^{r-1}\binom{r-1}{j}
+D_\nu^jw\,D_\nu^{r-1-j}w.
+$$
+
+The width-ratio clamp in Section 10.2 bounds the dominant high-order scale
+growth. Every final scalar/vector is checked for finiteness and raises
+`NumericalPrecisionError` if it is not representable.
 
 For intrinsic derivatives, let
 
@@ -1551,7 +1798,13 @@ $$
 
 For `wrt="parameter"`, construct truncated series for $A$, $B$, $w^2$, and $B^{-1}$, then obtain the requested vector by finite series multiplication. For `wrt="arc_length"`, apply $D_s=B^{-1}D_t$, with the required local/global scale conversion, or reuse the curve arc-length jet through order $j+2$. The latter path SHALL satisfy $C_j^{(s)}=D_s^{j+2}z$ by construction and is preferred when it has the tighter error bound. `curvature_derivative` uses the same $2AB^{-2}$ series but returns the scalar derivative; a curvature-vector derivative is not formed by multiplying that scalar by a fixed normal.
 
-Preimage derivatives SHALL be evaluated from Bernstein forward differences. Taylor reciprocal SHALL begin only after scaled evaluation has certified $B(0)>0$ consistently with the span regularity bound. Coefficient convolutions SHALL use FMA accumulation when available and compensated pairwise accumulation otherwise. All powers of the preimage scale, span width, and physical frame scale SHALL be tracked by exponent arithmetic and restored only once. A certified straight span returns an exact zero curvature vector for order zero and all orders; a nonstructural near-zero result retains its sign and direction and MUST NOT be snapped to zero.
+Preimage derivatives SHALL be evaluated from Bernstein forward differences.
+Taylor reciprocal SHALL begin only after span regularity has established a
+positive speed. Normalized Taylor coefficients (derivative divided by
+factorial) are used in the finite series recurrences. All returned values are
+checked for finite representability. A structurally zero result remains exact
+zero; a nonstructural near-zero result retains its sign and direction and MUST
+NOT be snapped to zero.
 
 The scalar curvature and order-zero vector kernels MAY use shorter specialized formulas, but they SHALL share coefficient conventions and error bounds with the arbitrary-order kernel. Curvature at an inflection is exactly or numerically zero; `principal_normal` is undefined when curvature is zero within the curvature-zero bound and SHALL raise `UndefinedPrincipalNormalError`. The curvature vector itself remains defined and equals zero at an exact inflection.
 
@@ -1606,16 +1859,22 @@ Use scaled `hypot` algorithms for vector norms. Coordinate differences SHALL be 
 
 ## 16.3 FMA and compensated arithmetic
 
-Use `math.fma` where available. Provide a tested fallback. Use error-free `TwoSum`/`TwoProd` or compensated summation for:
+Use `math.fsum` or Neumaier compensation for:
 
-- length tree aggregates;
+- flat length prefixes;
 - cumulative parameter weights;
-- coefficient sums with severe cancellation;
-- global displacement verification.
+- parameter totals and periodic knot extensions;
+- global displacement and length verification.
+
+FMA/error-free product kernels are permitted future hardening, not a current
+reference-profile dependency.
 
 ## 16.4 Underflow and overflow
 
-Patch normalization SHALL keep solver arithmetic away from subnormal and overflow ranges. `ldexp` SHALL be used to restore physical scales. Every restoration SHALL check finiteness.
+Global normalization SHALL keep solver arithmetic away from subnormal and
+overflow ranges. Every restoration to physical coordinates or units SHALL
+check finiteness. Per-patch `ldexp` scaling is a future extension, not a
+current invariant.
 
 The target test range SHALL include coordinate scales from at least `1e-150` through `1e307`, while recognizing that a tiny displacement superimposed on a huge coordinate may be unrepresentable in binary64 and must be rejected rather than fabricated.
 
@@ -1637,9 +1896,17 @@ Given identical binary64 inputs, policies, package version, NumPy/SciPy major ve
 
 ## 16.7 High-order geometry evaluation
 
-Each derivative and curvature-vector query SHALL carry a conservative componentwise forward-error estimate assembled from coefficient extraction, local evaluation, series operations, affine parameter scaling, and physical-frame restoration. The bound SHALL grow explicitly with degree, requested order, recurrence depth, and the condition estimates of $B^{-1}$. It MUST NOT be a fixed multiple of machine epsilon independent of those quantities.
+The reference evaluator uses finite Bernstein-difference and normalized-Taylor
+recurrences, canonical endpoint jets, the width-ratio guard in Section 10.2,
+and final finite-value checks. Join-side `auto` uses the verified
+degree/order-dependent continuity bound. It does not yet propagate a separate
+componentwise forward-error object for each runtime jet.
 
-Before evaluating a jet, scale the preimage coefficients by a common power of two so their maximum finite magnitude lies in a safe normal range. Perform Bernstein differences, products, and reciprocal recurrences on the scaled coefficients; propagate the removed exponent analytically. Cancellation-sensitive complex products SHALL use componentwise FMA formulas or error-free product expansions. At a join, left/right agreement SHALL compare the difference against the sum of the two forward-error bounds plus the continuity verification bound appropriate to the order.
+Power-of-two coefficient rescaling, error-free complex products, and
+componentwise recurrence bounds are recommended future hardening. An
+implementation that adds them SHALL preserve the elementary identities and
+exact endpoint/canonical-jet semantics; it MUST NOT change accepted geometry
+silently.
 
 The evaluator SHALL return only finite binary64 components. If a mathematically nonzero component is outside the representable range, the reciprocal-speed recurrence loses certification, or the propagated uncertainty cannot distinguish two discontinuous one-sided values, it raises `NumericalPrecisionError` or `DiscontinuousDerivativeError` as applicable. It SHALL never return NaN, infinity, a silently saturated value, or a fabricated zero. Exact structural zeros and polynomial derivatives above degree are returned as exact zero vectors.
 
@@ -1654,46 +1921,63 @@ Recommended independent pairs:
 - solver displacement in B-spline/extraction form; verifier displacement from compiled Bezier antiderivative controls;
 - solver continuity from shared B-spline controls; verifier continuity from left/right local jets;
 - speed coefficients from Bernstein products; verifier speed from direct preimage evaluation at certified points plus coefficient identity;
-- inverse LUT construction from robust root solves; runtime verification from direct forward/reverse arc evaluation.
+- inverse LUT monotonicity from direct arc samples; runtime acceptance from
+  direct forward/reverse Bernstein arc evaluation.
 
 ## 17.2 Required constructor checks
 
 Before publication, verify:
 
 1. every input point is reached at its interpolation knot within the position bound;
-2. every displacement constraint passes independently;
-3. every span PH reconstruction identity passes;
-4. every requested C, G, and curvature continuity condition passes;
+2. every displacement constraint passes the solver residual and the compiled
+   endpoint-displacement residual;
+3. every compiled span has been constructively derived from $w^2$ and
+   $|w|^2$;
+4. physical preimage jets through order $m-1$ agree at every ordinary join
+   and agree with sign $\eta$ at the closed seam, thereby establishing the
+   reported C/G/curvature guarantees;
 5. every span is regular with the required margin;
 6. every span length is positive and finite;
-7. the length tree total equals an independent compensated span sum;
-8. every inverse LUT is strictly monotone and bracket-correct;
-9. representative and adversarial local inverse targets pass the residual bound;
-10. all public endpoint values are finite;
-11. closed curves pass seam position and continuity checks.
+7. normalized and physical flat length prefixes are finite and strictly
+   increasing and end at their compensated totals;
+8. every inverse LUT is strictly monotone with exact endpoint entries;
+9. all public endpoint values are finite;
+10. closed curves pass seam position, tangent/frame, sign-aware preimage-jet,
+    and rotational/cyclic-equivariance checks.
+
+Representative inverse residuals and equivariance are suite-level acceptance
+tests rather than work repeated inside every constructor.
 
 ## 17.3 Position tolerance
 
-For a patch scale $H$ and coordinate value $P$, define a conservative position bound
+In normalized coordinates, the reference position bound is
 
 $$
 \tau_P=
-256\epsilon H
-+8\max(\operatorname{ulp}(P_x),\operatorname{ulp}(P_y))
-+E_{\rm eval}.
+f_P\epsilon
+\max\left(1,\max_i|\widehat P_i|\right)(m+1)^2,
+\qquad f_P=256.
 $$
 
-The exact factor SHALL be centralized and tested. A fixed absolute tolerance such as `1e-9` is forbidden.
+The physical diagnostic bound is $H\tau_P$. The solver targets one quarter
+of this value; publication requires both the displacement residual and the
+independently compiled endpoint residual not to exceed $\tau_P$. A fixed
+absolute tolerance such as `1e-9` is forbidden.
 
 ## 17.4 Continuity tolerance
 
-For a physical jet $J$, use a combined bound
+The reference verifier compares physical preimage derivatives
+$h^{-q}d^qw/d\nu^q$ after applying the seam sign. Its relative acceptance
+bound is
 
 $$
-\tau_J=C_J\epsilon\max(1,\|J_-\|,\|J_+\|)+E_{J,-}+E_{J,+},
+\tau_J=4096\epsilon\,4^m\max(1,m^2).
 $$
 
-where $C_J$ grows conservatively with derivative order and polynomial degree. High-order continuity requests may be rejected if the bound becomes too large to be meaningful.
+The factor $4^m$ conservatively covers the two alternating Bernstein endpoint
+difference ladders. Each residual is divided by
+$\max(1,|J_-|,|J_+|)$. Implementations MAY use a demonstrably tighter
+forward-error bound but SHALL retain the sign-aware physical-jet comparison.
 
 The default tangent absolute gate SHALL not exceed `1e-12` for well-conditioned normalized data. Curvature comparison SHALL use relative scaling and default behavior comparable to `1e-10` on unit-scale data.
 
@@ -1701,50 +1985,67 @@ The default tangent absolute gate SHALL not exceed `1e-12` for well-conditioned 
 
 `BuildDiagnostics` and `EditReport` SHALL include:
 
+- point/span/hidden-span counts and selected preimage degree where applicable;
 - solver iterations;
-- refinement rounds and hidden spans inserted;
-- maximum interpolation residual and bound;
-- maximum C/G/curvature continuity residual and bound;
+- refinement rounds;
+- maximum interpolation and continuity residuals; constructor diagnostics
+  also include their acceptance bounds;
 - minimum regularity ratio;
 - maximum inverse residual ratio;
-- LUT sizes and fast-path correction counts;
-- patch span count for edits;
+- maximum LUT size;
+- affected handles/spans, rebuilt/patch span counts, and version transition for edits;
 - whether long-double verification was used;
-- warnings that did not invalidate the result.
+
+In the reference profile `max_inverse_residual_ratio` is initialized to zero
+and `longdouble_verification_used` is false; those fields reserve space for
+future constructor-time inverse sampling and extended-precision verification.
 
 # 18. Exceptions
 
 ## 18.1 Hierarchy
 
-All package exceptions SHALL derive from `PHBSplineError`. Input/query errors SHALL also derive from `ValueError`; numerical construction/edit/query failures SHALL also derive from `RuntimeError`.
+All package exceptions SHALL derive from `PHSplineError`.
+`CubicPHSplineError` and `PHBSplineError` SHALL be sibling family roots;
+neither SHALL inherit from the other. Input/query errors SHALL also derive
+from `ValueError`; numerical construction/edit/query failures SHALL also
+derive from `RuntimeError`.
 
 Required hierarchy:
 
 ```text
-PHBSplineError
-+-- PHBSplineValueError, ValueError
-|   +-- InvalidPointDataError
-|   +-- InsufficientPointDataError
-|   +-- NonFiniteCoordinateError
-|   +-- DegenerateConsecutivePointError
-|   +-- ContinuitySpecificationError
-|   +-- ParameterOutOfRangeError
-|   +-- ArcLengthOutOfRangeError
-|   +-- UndefinedPrincipalNormalError
-|   +-- DiscontinuousDerivativeError
-|   +-- StaleHandleError
-|   +-- StaleLocationError
-+-- PHBSplineRuntimeError, RuntimeError
-    +-- ConstructionConvergenceError
-    +-- InterpolationVerificationError
-    +-- ContinuityVerificationError
-    +-- NonRegularSplineError
-    +-- ArcLengthInversionError
-    +-- LengthResolutionError
-    +-- NumericalPrecisionError
-    +-- LocalEditFailure
-    +-- ResourceLimitError
-    +-- TransactionError
+PHSplineError
+|-- PHSplineValueError, ValueError
+|-- PHSplineRuntimeError, RuntimeError
+|-- CubicPHSplineError
+`-- PHBSplineError
+
+CubicPHSplineValueError
+    : CubicPHSplineError, PHSplineValueError
+CubicPHSplineRuntimeError
+    : CubicPHSplineError, PHSplineRuntimeError
+PHBSplineValueError
+    : PHBSplineError, PHSplineValueError
+PHBSplineRuntimeError
+    : PHBSplineError, PHSplineRuntimeError
+
+Shared value errors (both concrete value branches):
+    InvalidPointDataError, InsufficientPointDataError,
+    NonFiniteCoordinateError, DegeneratePointDataError,
+    ParameterOutOfRangeError, ArcLengthOutOfRangeError,
+    UndefinedPrincipalNormalError
+
+Shared runtime errors (both concrete runtime branches):
+    NonRegularSplineError, ArcLengthInversionError,
+    LengthResolutionError, NumericalPrecisionError
+
+PH B-spline-only value errors:
+    ContinuitySpecificationError, DiscontinuousDerivativeError,
+    StaleHandleError, StaleLocationError
+
+PH B-spline-only runtime errors:
+    ConstructionConvergenceError, InterpolationVerificationError,
+    ContinuityVerificationError, LocalEditFailure,
+    ResourceLimitError, TransactionError
 ```
 
 ## 18.2 Structured fields
@@ -1785,21 +2086,31 @@ For fixed $m$, bounded hidden-span ratio, and bounded $I$:
 | Scalar `arc_length(u)` | `O(log M + C_eval(m))` |
 | Random `point_at_length(s)` | `O(log M + C_eval(m)*I_inv)` with bounded `I_inv` |
 | Sorted batch distance queries | `O(M + Q*C_eval(m))` or `O(Q*C_eval(m))` after the starting span |
-| Strict-local move/insert/delete | `O(log N + K*m^3*I)`, with bounded `K` |
-| Tree metric update | `O(log M)` |
+| Local geometry solve/compilation only | `O(K*m^3*I)`, with order-derived bounded `K` |
+| Total strict-local move/insert/delete | `O(N + K*m^3*I)` in the reference flat-prefix profile |
+| Flat metric-prefix rebuild | `O(M)` |
 | Compact snapshot build | `O(M)` |
 | Sequential cursor advance | amortized `O(1 + crossed_spans)` |
 
-Absolute timing targets SHALL be benchmark gates, not API guarantees. The reference target for default `G2` on a modern desktop is:
+Absolute timing targets SHALL be benchmark gates, not API guarantees. The
+local nonlinear portion and total edit latency SHALL be reported separately;
+the latter currently includes linear validation and prefix publication. A
+future augmented-tree profile may target:
 
 - mutable scalar random `point_at_length`: median below 15 microseconds for 100 to 100,000 spans;
 - compact snapshot scalar random `point_at_length`: median below 8 microseconds where Python dispatch dominates;
-- one-point strict-local move: latency approximately independent of total `N` once `N` exceeds leaf/patch size;
-- no more than two Halley/Newton corrections for at least 99.9 percent of benchmark distance queries; all remaining queries use the bounded fallback.
+- one-point strict-local geometry reconstruction approximately independent of
+  total `N`, with total reference-profile latency reported separately;
+- no more than two Newton corrections for at least 99.9 percent of benchmark
+  distance queries; all remaining queries use the bounded bisection fallback.
 
 These numbers SHALL be measured on a declared platform and MUST NOT be presented as universal guarantees.
 
 # 20. Serialization
+
+**Future extension.** The reference profile does not yet expose persistence;
+the requirements in this section define a compatible future format and are
+not current API claims.
 
 ## 20.1 Authoritative state
 
@@ -1821,6 +2132,11 @@ On load, the implementation SHALL validate schema, finiteness, array sizes, and 
 Untrusted serialized data MUST NOT be allowed to bypass regularity or bounds checks.
 
 # 21. Threading and concurrency
+
+**Future extension.** Immutable snapshot queries are isolated from later
+edits, but the reference mutable object does not yet claim a multi-writer or
+reader/writer locking contract. The following requirements apply when such a
+profile is implemented.
 
 The mutable `PHBSpline` SHALL support multiple concurrent readers and a single writer through a read/write lock or immutable-root publication.
 
@@ -1877,12 +2193,42 @@ At minimum test:
 
 Verify left/right jets independently in normalized and physical coordinates.
 
+### 22.3.1 Mandatory closed-seam regression matrix
+
+Closed tests SHALL exercise both the observable curve and the hidden
+square-root topology:
+
+- periodic and antiperiodic guide winners, with `seam_sign` restricted to
+  exactly $\pm1$;
+- twisted extraction for degrees smaller than, equal to, and larger than the
+  closed base-control count, including multiple wraps of one stencil;
+- unwrapped Greville abscissae with the factor $\eta^q$;
+- sign-aware canonical preimage jets through the requested order;
+- exact position closure plus tangent, curvature-vector, and requested
+  derivative continuity at $u=0/1$;
+- cyclic reindexing, rotation, reflection, and rotational-symmetry
+  equivariance;
+- wrapped local move, insert, and delete patches at and adjacent to the seam
+  for at least G2 and G8;
+- bitwise identity of every exterior span after a wrapped local edit.
+
+The required documentary counterexample is the 24-anchor radial star with
+alternating radii and 12-fold rotational symmetry at G8. Forcing a periodic
+preimage ($\eta=+1$) produced a seam-localized loop and destroyed the expected
+rotational symmetry even though point closure could still pass. Adding only
+antiperiodic extraction was also insufficient: reducing negative/unwrapped
+Greville abscissae modulo the period without $\eta^q$ produced a different
+seam-localized multi-sector distortion. The complete correction is the
+single monodromy invariant propagated through branch selection, extraction,
+Greville seeding, canonical jets, verification, and local-edit gauge
+transport.
+
 ## 22.4 Dynamic-edit property tests
 
 For point counts including 10, 1,000, and 100,000:
 
 - move interior and endpoint points;
-- insert before, after, and within leaf boundaries;
+- insert before, after, and around flat-prefix/span-index boundaries;
 - delete interior and endpoint points;
 - perform long randomized edit sequences;
 - batch edits in transactions;
@@ -1903,7 +2249,7 @@ For every tested span, query:
 - distances concentrated where speed is minimal;
 - spans at the regularity-ratio threshold;
 - alternating tiny and huge span lengths;
-- targets exactly at tree prefix boundaries;
+- targets exactly at flat-prefix boundaries;
 - scalar float and `LengthCoordinate` forms;
 - sorted and unsorted batch forms.
 
@@ -1954,7 +2300,7 @@ Use property-based testing where practical. Fuzz:
 - point arrays and malformed inputs;
 - continuity values;
 - edit sequences;
-- tree split/merge boundaries;
+- flat-prefix exact boundaries and structural-sharing edges;
 - extreme distance values;
 - derivative orders, `wrt` modes, and join-side selections;
 - LUT sizes;
@@ -1967,17 +2313,21 @@ No fuzz input may produce an unhandled `RuntimeWarning`, segmentation fault, inf
 Benchmarks SHALL measure:
 
 - construction time versus `N` at fixed order;
-- strict-local edit time versus `N` at fixed patch size;
-- tree update time;
+- strict-local geometry-rebuild time and total edit time versus `N` at fixed
+  order-derived patch size;
+- full validation, tuple assembly, and flat-prefix publication time;
 - scalar random distance access versus `N`;
-- compact snapshot versus mutable tree queries;
+- mutable object versus snapshot queries;
 - sorted batch throughput;
 - scalar and batch derivative-vector and curvature-vector throughput versus requested order;
 - full-jet throughput versus repeated single-order calls;
 - correction-count distribution;
 - memory per input point and per hidden span.
 
-The edit benchmark SHALL explicitly demonstrate flat local solve time plus logarithmic tree overhead from 1,000 to 100,000 points.
+The edit benchmark SHALL explicitly separate the approximately flat local
+solve/span-compilation component from the current linear whole-object
+validation and flat-prefix publication component for 100, 1,000, and 10,000
+points. It MUST report the total latency users observe.
 
 # 23. Acceptance criteria
 
@@ -1986,12 +2336,17 @@ Version 1 is releasable only when all of the following are true:
 1. The documented public API and exception hierarchy are implemented and typed.
 2. Default construction of representative arbitrary point data produces a verified regular `G2` spline.
 3. All accepted curves satisfy exact point interpolation within the scale-aware bound.
-4. Requested finite continuity is verified at every join and closed seam.
+4. Requested finite continuity is verified at every join; closed curves also
+   pass the monodromy, twisted-extraction, Greville-sign, seam-gauge, and
+   symmetry regression matrix in Section 22.3.1.
 5. Arbitrary-order derivative-vector and curvature-vector queries use the specified elementary kernels, satisfy their jet identities and error bounds, and never use finite differences.
 6. Arc length is generated analytically from PH coefficients with no quadrature.
 7. Every scalar inverse query either meets the residual bound or raises a typed exception.
-8. Strict-local edits are atomic, leave exterior geometry unchanged, and have measured runtime independent of total point count apart from tree lookup/update.
-9. Expanding/global repair behavior is explicit and tested.
+8. Strict-local edits are atomic and leave exterior span kernels bitwise
+   unchanged; benchmarks separately report bounded local reconstruction and
+   current total $O(N)$ publication cost.
+9. Reference `expand` admission and explicit global-repair behavior are
+   documented and tested without claiming geometric retry expansion.
 10. 100,000-point construction, query, and local-edit tests pass within declared memory limits.
 11. Scale, reversal, inflection, self-intersection, and near-regularity adversarial tests pass or fail with the declared typed exceptions.
 12. The package emits no `RuntimeWarning` under the test suite.
@@ -2003,8 +2358,10 @@ The recommended work breakdown is:
 
 ## Phase 1 - immutable mathematical core
 
-- Bernstein and B-spline extraction utilities;
-- variable-degree preimage and span compilation;
+- minimum-degree rule and simple-midpoint knot topology;
+- open extraction and twisted periodic/antiperiodic closed extraction from
+  endpoint basis derivatives;
+- unwrapped sign-aware Greville initialization and canonical shared jets;
 - exact speed and arc polynomial generation;
 - arbitrary-order derivative and curvature-vector kernels;
 - geometry evaluation and regularity certificate;
@@ -2012,7 +2369,7 @@ The recommended work breakdown is:
 
 ## Phase 2 - distance kernel
 
-- double-double length arithmetic;
+- compensated flat length prefixes;
 - forward/reverse arc evaluators;
 - LUT construction;
 - safeguarded inverse solver;
@@ -2020,24 +2377,25 @@ The recommended work breakdown is:
 
 ## Phase 3 - static PH B-spline constructor
 
-- guide initializer;
+- deterministic secant guide and two-state closed monodromy selection;
 - analytic displacement constraints and Jacobian;
-- deterministic sparse/banded solver;
-- hidden-knot refinement;
+- minimum-norm sparse constraint projection with deterministic damping;
+- direct endpoint-jet extraction and recursive Bernstein-box regularity;
 - full independent verification;
 - immutable snapshot API.
 
-## Phase 4 - dynamic tree and local edits
+## Phase 4 - local geometry edits and flat publication
 
-- point/span B+ tree;
 - stable handles and locations;
-- transactional move;
-- insertion and deletion;
-- persistent snapshots;
-- strict-local and expanding policies.
+- order-derived clamped patch with fixed exterior jets;
+- wrapped closed-patch gauge transport;
+- transactional move, insertion, and deletion;
+- structural sharing of exterior span kernels;
+- rebuilt flat parameter/length prefixes and immutable snapshots.
 
 ## Phase 5 - enterprise hardening
 
+- optional augmented point/span/metric tree;
 - extreme-scale local frames;
 - serialization;
 - concurrency;
@@ -2106,40 +2464,37 @@ positions = snapshot.points_at_length(np.linspace(0.0, snapshot.length, 10000))
 
 ```text
 function location_at_length(s):
-    target = validate_length_coordinate(s)
+    target = validate_length_coordinate(s) / global_scale
     if target == 0: return first span at u=0
-    if target == total_length: return last span at u=1
+    if target == normalized_total_length: return last span at u=1
 
-    node, local_s = length_tree.predecessor_and_remainder(target)
-    span = node.span
-    L = span.length_dd
+    span_id = searchsorted(normalized_prefix, target, side="right") - 1
+    local_s = target - normalized_prefix[span_id]
+    span = spans[span_id]
 
-    if local_s <= L / 2:
-        direction = FORWARD
-        target_local = local_s
-        xi = target_local / L
-    else:
-        direction = REVERSE
-        target_local = L - local_s       # double-double subtraction
-        xi = target_local / L
-
-    cell = min(floor(xi * span.lut.M), span.lut.M - 1)
-    lo, hi = span.lut.bracket(cell, direction)
-    u = span.lut.seed(cell, xi, direction)
-    u = clamp(u, lo, hi)
+    reverse = local_s > endpoint_reverse_threshold * span.length
+    goal = span.length - local_s if reverse else local_s
+    lut_s = reversed_complements(span.lut_s) if reverse else span.lut_s
+    cell = searchsorted(lut_s, goal, side="right") - 1
+    lo, hi = parameter_bracket(cell, reverse)
+    u = linear_parameter_seed(lut_s[cell:cell+2], goal, lo, hi)
 
     for iteration in 0 .. fast_iterations-1:
-        f, fp, fpp, eval_bound = span.arc_residual_derivatives(u, target_local, direction)
-        if abs(f) <= inverse_tolerance(L, target_local, eval_bound):
-            return location(span, recover_direction(u), version)
-        update bracket from sign(f)
-        proposal = safeguarded_halley_or_newton(...)
+        f, fp = fast_power_arc_residual_and_speed(u, goal, reverse)
+        proposal = u - f / fp
         if proposal invalid: break
         u = proposal
 
-    for iteration in fast_iterations .. max_iterations-1:
-        use ITP/bisection/Newton while preserving bracket
-        verify residual after each evaluation
+    for iteration in 0 .. max_iterations-1:
+        f = authoritative_bernstein_arc_residual(u, goal, reverse)
+        if abs(f) <= 64*eps*span.length + 4*ulp(goal):
+            return CurveLocation(span_id, u, version)
+        update bracket from sign(f) and direction
+        fp = signed_direct_speed_from_preimage(u, reverse)
+        proposal = u - f / fp
+        if proposal is nonfinite or outside bracket:
+            proposal = midpoint(bracket)
+        u = proposal
 
     raise ArcLengthInversionError(...)
 ```
@@ -2151,31 +2506,29 @@ function move_point(handle, new_point, repair="strict_local"):
     begin private transaction
     resolve handle and validate new_point
     modify candidate interpolation record
-    patch = initial_support_patch(handle, degree, hidden_spans)
+    recompute normalized points and parameter widths in retained global frame
 
-    while true:
-        freeze exterior preimage controls and boundary jets
-        build normalized candidate guide in patch
-        solve changed displacement constraints with analytic Jacobian
-        compile candidate span kernels
-        independently verify interpolation, continuity, regularity, and inverse kernels
+    if repair == "global":
+        candidate = full_build(candidate_points)
+    else:
+        changed = intervals whose stable edge, endpoints, or width changed
+        patch = shortest_contiguous_patch(changed, logical_count=m+3)
+        require one exterior interval for a closed patch
+        freeze physical exterior preimage jets through order m-1
+        if patch crosses closed seam:
+            transport right boundary jet through seam_sign
+        build clamped open midpoint basis and guide in patch
+        impose endpoint jets by direct extraction-block solves
+        solve exact displacement constraints on free controls by dense lstsq
+        compile patch and transport post-seam preimages back to stored gauge
+        structurally share every exterior span
+        verify all joins touching rebuilt spans with sign-aware seam rule
+        candidate = assemble full span tuple and flat prefixes
 
-        if verified:
-            replace affected persistent tree path
-            update length and parameter aggregates
-            atomically publish root and version
-            return EditReport
-
-        if repair == "strict_local":
-            rollback and raise LocalEditFailure
-        if repair == "expand" and patch can expand:
-            patch = expand_geometrically(patch)
-            continue
-        if repair == "global":
-            rebuild all
-            continue
-
-        rollback and raise LocalEditFailure
+    require rebuilt span count <= selected admission limit
+    independently verify candidate postconditions
+    atomically publish candidate and increment version
+    return EditReport
 ```
 
 # 27. Design rationale and nonclaims
@@ -2202,14 +2555,31 @@ A large point move can make the fixed exterior jets incompatible with any regula
 - expanding patch with potentially larger cost;
 - explicit global rebuild.
 
-# 28. References
+## 27.5 Why a closed curve can require an antiperiodic preimage
 
-1. H. Abraham, [`cubic-ph-spline`](https://github.com/ahrvoje/cubic-ph-spline), version 1.1.0 metadata and repository documentation, reviewed 2026-08-05.
-2. G. Albrecht, C. V. Beccari, J.-C. Canonne, and L. Romani, ["Pythagorean-Hodograph B-Spline Curves"](https://arxiv.org/abs/1609.07888), *Computer Aided Geometric Design* 57 (2017), 57-77, DOI 10.1016/j.cagd.2017.09.001.
-3. R. T. Farouki, [*Introduction to Pythagorean-Hodograph Curves*](https://faculty.engineering.ucdavis.edu/farouki/wp-content/uploads/sites/51/2021/07/Introduction-to-PH-curves.pdf), Springer-related author manuscript/material.
-4. C. Giannelli, L. Sacco, and A. Sestini, ["A local C2 Hermite interpolation scheme with PH quintic splines for 3D data streams"](https://arxiv.org/abs/2108.12948), 2021.
-5. M. Knez, F. Pelosi, and M. L. Sampoli, ["Construction of G2 planar Hermite interpolants with prescribed arc lengths"](https://arxiv.org/abs/2202.11371), 2022.
-6. J. Kosinka and M. Lavicka, ["Pythagorean Hodograph Curves: A Survey of Recent Advances"](https://www.heldermann-verlag.de/jgg/jgg18/j18h1kosi.pdf), *Journal for Geometry and Graphics* 18(1), 2014.
+The PH map squares the preimage angle. A tangent making one full turn around a
+regular simple closed curve lifts to a square root making one half-turn, so
+the lift returns with the opposite sign. Requiring `w(T) == w(0)` confuses the
+curve's periodic observable $w^2$ with a choice of square-root gauge. The
+correct seam invariant is `w(T) == eta*w(0)` with `eta` selected from both
+topological possibilities and propagated everywhere the basis wraps.
+
+This distinction remained hidden on ordinary circles and low-order examples
+because position closure and even several frame checks can pass while the
+shape defect is concentrated near the chosen seam. The G8 alternating-radius
+radial star made the error unmistakable: a periodic-only basis broke exact
+12-fold equivariance and introduced a local loop.
+
+## 27.6 Why the seam sign must reach Greville seeds and edits
+
+Twisted extraction alone defines the right function space but does not give a
+coherent initial control field. Closed Greville abscissae extend outside the
+base period; wrapping their parameters without wrapping their gauge changes
+the seed discontinuously. Likewise, a wrapped local patch is an open solve on
+the universal cover and its boundary jets live in that lifted gauge. The same
+single `eta` must therefore govern control extension, seed evaluation,
+canonical jets, verification, and patch transport. Treating any one of these
+as an unrelated seam exception recreates the defect in a different stage.
 
 # Appendix A. Suggested diagnostic dataclasses
 
@@ -2268,7 +2638,9 @@ class Frame2D:
 
 # Appendix B. Double-double primitives
 
-The length tree SHOULD use standard error-free transformations:
+**Future extension.** The reference profile uses Neumaier-compensated flat
+prefixes. An augmented double-double length tree SHOULD use standard
+error-free transformations:
 
 ```text
 TwoSum(a, b):
@@ -2349,4 +2721,45 @@ fallback count
 peak resident memory
 ```
 
-Benchmarks SHALL include both a mutable tree and a compact immutable snapshot. A query benchmark that omits residual verification does not measure the production contract.
+Reference benchmarks SHALL include the mutable object and immutable snapshot,
+report local reconstruction separately from total flat-prefix edit latency,
+and identify any future tree profile by name. A query benchmark that omits
+residual verification does not measure the production contract.
+
+# Appendix E. Reconstruction conformance ledger
+
+The following ledger is the short-form guard against repeating the basis and
+seam mistakes corrected in revision 0.4. A reimplementation is not
+reference-profile conforming unless every row is true.
+
+| Concern | Required reference decision | Prohibited substitution |
+|---|---|---|
+| Continuity degree | $m=\max(2,g,c,k+2)$ and curve degree $2m+1$ | raising degree for shape freedom; zeroing invented high derivatives |
+| Knot topology | one simple midpoint knot per user interval; two compiled spans | solving first and refining afterwards; degree inflation |
+| Open basis | clamped, $2N+m$ controls for $N$ intervals | periodic wrapping |
+| Closed basis | $2N$ controls with $c_{j+q(2N)}=\eta^qc_j$ | unconditional modulo-periodic controls |
+| Seam selection | minimize both $\eta=+1$ and $\eta=-1$ cyclic root lifts | forcing periodic $w$ because $z$ is closed |
+| Greville seed | keep abscissae unwrapped and apply $\eta^{\lfloor x/T\rfloor}$ | modulo reduction without gauge sign |
+| Extraction | direct endpoint basis-derivative jets; twist before wrapped-column collapse | sampled collocation inversion |
+| Shared jets | canonical physical jet, sign $+1$ ordinarily and $\eta$ at seam | independent cancellation-prone endpoint ladders |
+| Constraints | exact two-subspan Bernstein-Gram displacement and analytic Jacobian | quadrature or finite-difference Jacobian |
+| Shape choice | deterministic minimum-norm projection from guide seed | undocumented strain/elastica/length objective |
+| Regularity | recursive Bernstein bounding boxes and ratio gate | sample-only nonzero checks |
+| Local patch | $m+3$ logical intervals, fixed exterior jets through $m-1$ | order-independent 7/7/6 folklore |
+| Wrapped edit | solve in lifted open gauge; transport by $\eta$ on crossing | treating array index zero as an ordinary join |
+| Publication | structurally share exterior spans; rebuild verified flat prefixes | claiming current total edit cost is size-independent |
+| Inverse | parameter-uniform LUT, linear seed, bracketed Newton/bisection | claiming reserved Halley/ITP/monotone-cubic controls are active |
+
+At minimum, reconstruction acceptance SHALL include exact
+`preimage_degree == r_*` tests, G2/G4/G8 interpolation and jet checks, the G8
+12-fold radial-star symmetry regression, multiple-wrap twisted extraction,
+and G2/G8 seam-crossing local edits with exterior structural sharing.
+
+# 28. References
+
+1. H. Abraham, [`cubic-ph-spline`](https://github.com/ahrvoje/cubic-ph-spline), version 1.1.0 metadata and repository documentation, reviewed 2026-08-05.
+2. G. Albrecht, C. V. Beccari, J.-C. Canonne, and L. Romani, ["Pythagorean-Hodograph B-Spline Curves"](https://arxiv.org/abs/1609.07888), *Computer Aided Geometric Design* 57 (2017), 57-77, DOI 10.1016/j.cagd.2017.09.001.
+3. R. T. Farouki, [*Introduction to Pythagorean-Hodograph Curves*](https://faculty.engineering.ucdavis.edu/farouki/wp-content/uploads/sites/51/2021/07/Introduction-to-PH-curves.pdf), Springer-related author manuscript/material.
+4. C. Giannelli, L. Sacco, and A. Sestini, ["A local C2 Hermite interpolation scheme with PH quintic splines for 3D data streams"](https://arxiv.org/abs/2108.12948), 2021.
+5. M. Knez, F. Pelosi, and M. L. Sampoli, ["Construction of G2 planar Hermite interpolants with prescribed arc lengths"](https://arxiv.org/abs/2202.11371), 2022.
+6. J. Kosinka and M. Lavicka, ["Pythagorean Hodograph Curves: A Survey of Recent Advances"](https://www.heldermann-verlag.de/jgg/jgg18/j18h1kosi.pdf), *Journal for Geometry and Graphics* 18(1), 2014.
