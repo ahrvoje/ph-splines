@@ -139,6 +139,8 @@ constant-cost elementary local inversion, never an iterative geometric search.
   [abstract/metadata](https://arxiv.org/abs/1609.07888).
 - Farouki, [*Arc lengths of rational Pythagorean-hodograph
   curves*](https://escholarship.org/content/qt90s84043/qt90s84043.pdf).
+- Farouki and Sakkalis, [*Real rational curves are not ‘unit
+  speed’*](https://doi.org/10.1016/0167-8396(91)90040-I).
 - Knez, Pelosi and Sampoli, [*Construction of G² planar Hermite interpolants
   with prescribed arc lengths*](https://arxiv.org/pdf/2202.11371).
 - Gajny, Béarée, Nyiri and Gibaru, [*Path planning with PH G² splines in
