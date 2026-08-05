@@ -1,5 +1,5 @@
 ---
-title: "Technical specification: CubicPHSpline"
+title: "Technical specification: cubic PH spline family"
 lang: en-US
 geometry: margin=25mm
 fontsize: 10pt
@@ -20,10 +20,15 @@ header-includes:
 
 # 1. Scope and mathematical limitations
 
-`CubicPHSpline` represents an **open planar spline of cubic PH segments
+`CubicPHSplineOpen` represents an **open planar spline of cubic PH segments
 interpolating arbitrary admissible input points** - convex, collinear, or
 general free-form data with inflections and mixed straight and curved
 spans.
+
+`CubicPHSplineClosed` supplies the corresponding cyclic topology. Section 23
+defines its square convex $G^2$ system, seam contract, and exact reuse of the
+general-data auxiliary-inflection machinery. `CubicPHSpline` is their abstract
+family base and represents neither topology by itself.
 
 For input points
 
@@ -97,16 +102,21 @@ solution exists, and under a slightly stronger angle bound it is unique.
 
 # 2. Public API
 
+`CubicPHSpline` is the abstract cubic-family base and SHALL NOT be directly
+instantiable. `CubicPHSplineOpen` and `CubicPHSplineClosed` SHALL be direct
+sibling subclasses of that base; neither concrete topology class may inherit
+from the other. Both remain subclasses of the package-wide `PHSpline` base.
+
 ## 2.1 Constructor
 
 ```text
-CubicPHSpline(p)
+CubicPHSplineOpen(points)
 ```
 
 Accepted input:
 
 ```text
-p: list[list[Real] | tuple[Real, Real]]
+points: list[list[Real] | tuple[Real, Real]]
 ```
 
 Requirements:
@@ -119,6 +129,18 @@ Requirements:
 - the constructor copies the data and retains no references to mutable input objects.
 
 The resulting object shall be immutable from the public API.
+
+The closed constructor is:
+
+```text
+CubicPHSplineClosed(points)
+```
+
+It accepts at least three cyclic points. Each authoritative point SHALL be
+listed once: an exactly repeated final seam point is rejected. The constructor
+SHALL close the final point back to the first internally and SHALL verify the
+declared seam continuity independently. Section 23 defines its cyclic
+construction and the additional admissibility rules.
 
 ## 2.2 Required methods
 
@@ -2183,7 +2205,8 @@ ph_spline/
 Responsibilities:
 
 - `base.py`: common abstract `PHSpline` geometry and distance interface;
-- `cubic.py`: public `CubicPHSpline` class and global parameter dispatch;
+- `cubic.py`: abstract `CubicPHSpline` family base, concrete
+  `CubicPHSplineOpen` and `CubicPHSplineClosed`, and global parameter dispatch;
 - `segment.py`: immutable cubic PH segment representation;
 - `construction.py`: input classification, endpoint tangents, PH edge lengths;
 - `nonlinear.py`: bounded tridiagonal $G^2$ solve;
@@ -2198,6 +2221,8 @@ and their documented exception types:
 ```text
 PHSpline
 CubicPHSpline
+CubicPHSplineOpen
+CubicPHSplineClosed
 PHSplineError
 CubicPHSplineError
 ```
@@ -2209,7 +2234,7 @@ and the documented exception subclasses.
 A call to
 
 ```text
-curve = CubicPHSpline(p)
+curve = CubicPHSplineOpen(p)
 ```
 
 has exactly two valid outcomes:
@@ -2467,3 +2492,162 @@ the prescribed point-only endpoint-tangent policy and on the
 deterministic completions of section 22.2 (chord-length parametrization,
 the conditioning clamp on $\rho$, and the fallback tilt), which are
 necessarily design choices at points the reference leaves open.
+
+# 23. Closed cubic PH splines
+
+## 23.1 Continuity contract and impossibility boundary
+
+`CubicPHSplineClosed` SHALL interpolate a cyclic point list, close position
+exactly, and provide a verified oriented $G^2$ seam at $u=0\equiv1$. Its
+continuity contract elsewhere is identical to the open class:
+
+- $G^2$ at every join inside a same-sign curved run;
+- $G^1$ at each section-22 auxiliary curvature-sign change;
+- $G^1$ at a curved/straight transition;
+- $G^2$ along a completely straight sub-run.
+
+A globally $G^2$ sign-changing cubic PH loop is impossible. For a regular
+cubic PH segment $z'=w^2$ with $w=a+bt$,
+
+$$
+\kappa(t)=\frac{2\operatorname{Im}(\bar a b)}{|a+bt|^4}.
+$$
+
+The numerator is constant. If curvature vanishes at one regular endpoint,
+it vanishes on the whole segment and that segment is straight. Consequently,
+signed-curvature equality at a $G^2$ join propagates one nonzero curvature
+sign. This counterexample boundary SHALL be documented in the public API;
+an implementation MUST NOT claim global $G^2$ for a nonconvex closed loop.
+
+## 23.2 Strictly convex cyclic system
+
+For $N$ authoritative cyclic points $P_0,\ldots,P_{N-1}$ define chord $i$ by
+$P_i\to P_{i+1\bmod N}$. Every chord must be representable and nonzero. Let
+$\tau\in\{-1,+1\}$ be the common material turn sign, $\psi_i$ consistently
+unwrapped chord angles, and $\phi_i>0$ the turn from chord $i-1$ to chord $i$
+at point $i$.
+
+There is one tangent fraction per cyclic point,
+
+$$
+x_i\in(0,1),\qquad
+\theta_i=\psi_{i-1}+\tau x_i\phi_i,
+$$
+
+with indices understood cyclically and angles unwrapped. Segment $i$ has the
+positive endpoint deviations
+
+$$
+\alpha_i=(1-x_i)\phi_i,
+\qquad
+\beta_i=x_{i+1}\phi_{i+1}.
+$$
+
+The section-8 elementary formulas SHALL compute its two positive PH edge
+lengths. Let $k_i^{(0)}$ and $k_i^{(1)}$ be the positive curvature magnitudes
+at its start and end. The cyclic residual is
+
+$$
+F_i(x)=\log k_{i-1}^{(1)}-\log k_i^{(0)},
+\qquad i=0,\ldots,N-1.
+$$
+
+Thus the system has exactly $N$ real tangent unknowns and $N$ curvature
+equations. Tangent continuity is structural because both adjacent segments
+share $\theta_i$. No open endpoint tangent convention remains and no
+coefficient or derivative may be assigned zero to close the count.
+
+This square count generically removes continuous geometric freedom, but is
+not by itself an existence or uniqueness theorem: the nonlinear system can
+have no admissible root, one root, or several isolated roots. The reference
+profile SHALL use deterministic centered-secant and chord-weighted starts,
+select the first strictly accepted solution, and raise a typed convergence or
+admissibility error when no start produces a verified root.
+
+## 23.3 Cyclic numerical solve
+
+Each residual depends only on $x_{i-1},x_i,x_{i+1}$, so the Jacobian is cyclic
+tridiagonal. The reference implementation SHALL:
+
+1. evaluate the guarded residual only with elementary cubic-PH expressions;
+2. assemble its Jacobian by complex-step differentiation using a deterministic
+   distance-two coloring of the cyclic columns (at most five colors);
+3. globalize with the bounded trust-region least-squares solve on
+   $[x_{\min},1-x_{\min}]^N$;
+4. apply a damped cyclic Newton polish;
+5. rebuild with unguarded formulas and accept only when
+   $\max_i|F_i|\le F_{\rm tol}$;
+6. independently verify reconstruction, regularity, oriented convexity,
+   position closure, unit-tangent equality and signed-curvature equality at
+   all $N$ joins.
+
+For a simple convex loop the unwrapped tangent turns by $2\pi\tau$. Therefore
+the last endpoint preimage uses the antiperiodic lift
+
+$$
+w(1)=-w(0),
+$$
+
+while $w(1)^2=w(0)^2$. This sign is a discrete square-root gauge and does not
+constitute geometric shape freedom. The public guarantee is geometric $G^2$;
+it does not promise equality of the two local segment speeds or a globally
+$C^2$ piecewise-polynomial parameterization.
+
+## 23.4 General cyclic data and section-22 reuse
+
+When cyclic turns change sign or contain straight classifications, the
+implementation SHALL reuse section 22 rather than invent a second inflection
+policy. The reference construction forms five exact repetitions of the cyclic
+point list plus the closing first point, runs the unchanged open planner, and
+publishes only the central period. Two guard periods on each side ensure that
+every central convex block has prescribed auxiliary boundaries and is
+independent of the artificial outer open boundaries.
+
+The crop SHALL:
+
+- locate the exact central user knots $2/5$ and $3/5$;
+- copy and reindex every compiled segment in that period;
+- remap its knots affinely to $[0,1]$ and snap each authoritative knot exactly
+  to $i/N$ after a bounded residual check;
+- translate auxiliary span indices back to $0,\ldots,N-1$;
+- copy the declared join kinds and prescribed tangents, including the seam;
+- require the seam kind to be `g2`;
+- compare the following guarded period's Bézier nets with the published
+  period and reject a nonperiodic result;
+- rerun regularity, admissibility and cyclic continuity verification on the
+  cropped segments.
+
+This repeated construction is a deterministic way to apply the existing
+local subsegment-inflection machinery to cyclic indexing. It is not an
+approximation and it MUST NOT expose the guard periods as public points or
+segments.
+
+## 23.5 Closed parameter and distance behavior
+
+The authoritative knot identity is
+
+$$
+r(i/N)=P_i,\qquad i=0,\ldots,N-1,
+$$
+
+and $r(1)=r(0)=P_0$. `arc_length`, `parameter_at_length` and
+`point_at_length` retain the finite prefix domains $u\in[0,1]$ and
+$s\in[0,L]$; they do not implicitly wrap out-of-range scalar arguments.
+At both domain ends, `point`, `tangent`, `normal` and `signed_curvature` SHALL
+return seam-consistent values within their documented tolerances.
+
+## 23.6 Required closed tests
+
+Conformance tests SHALL include:
+
+- clockwise and counterclockwise cyclic polygons with 3, 4, 5, 8 and at
+  least 64 points;
+- exact interpolation at every $i/N$;
+- independent position, tangent and signed-curvature seam checks;
+- deterministic repeated construction;
+- nonconvex radial waves and symmetric zigzag stars exercising multiple
+  auxiliary subsegment inflections;
+- rejection of fewer than three points and a repeated final seam point;
+- rejection when the selected seam is a curved/straight $G^1$ transition;
+- arc-length inversion and endpoint distance identity;
+- the complete 128-image `examples/cubic_closed` generation run.

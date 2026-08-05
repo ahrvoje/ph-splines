@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ph_spline import PHBSpline
+from ph_spline import PHBSplineOpen
 
 INK = "#172033"
 SURFACE = "#fcfcfb"
@@ -30,7 +30,7 @@ plt.rcParams.update(
 )
 
 
-def normalized_samples(curve: PHBSpline, count: int = 600) -> np.ndarray:
+def normalized_samples(curve: PHBSplineOpen, count: int = 600) -> np.ndarray:
     """Sample the internal normalized geometry without risking display overflow."""
 
     values = np.empty((count, 2), dtype=np.float64)
@@ -41,7 +41,7 @@ def normalized_samples(curve: PHBSpline, count: int = 600) -> np.ndarray:
     return values
 
 
-def verify(curve: PHBSpline) -> None:
+def verify(curve: PHBSplineOpen) -> None:
     """Exercise interpolation, regularity, and analytic distance inversion."""
 
     for index, knot in enumerate(curve._knots):
@@ -59,7 +59,7 @@ def verify(curve: PHBSpline) -> None:
 
 
 def render_curve(
-    curve: PHBSpline,
+    curve: PHBSplineOpen,
     path: Path,
     title: str,
     note: str = "",
@@ -124,7 +124,7 @@ def render_curve(
 
 
 def normalized_vectors(
-    curve: PHBSpline,
+    curve: PHBSplineOpen,
     parameters: np.ndarray,
     evaluator,
 ) -> tuple[np.ndarray, np.ndarray]:

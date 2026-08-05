@@ -35,7 +35,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 # sampling period [s], number of points, PH CPU time [s], polynomial CPU time [s]
 PAPER_ROWS = (
@@ -61,9 +61,9 @@ TRIALS = 3
 MIN_TRIAL_SECONDS = 0.10
 
 
-def representative_curve() -> CubicPHSpline:
+def representative_curve() -> CubicPHSplineOpen:
     """Small curved spline; deliberately harder than a straight PH segment."""
-    return CubicPHSpline([[0.0, 0.0], [0.8, 0.45], [1.9, 1.25]])
+    return CubicPHSplineOpen([[0.0, 0.0], [0.8, 0.45], [1.9, 1.25]])
 
 
 def feedrate_targets(length: float, count: int) -> list[float]:
@@ -74,7 +74,7 @@ def feedrate_targets(length: float, count: int) -> list[float]:
     return [float(length * f) for f in fractions]
 
 
-def time_traversal(curve: CubicPHSpline, targets: list[float]) -> float:
+def time_traversal(curve: CubicPHSplineOpen, targets: list[float]) -> float:
     """Best-of-three time for one complete traversal, with calibrated batching."""
     point_at_length = curve.point_at_length
     for s in targets[: min(len(targets), 256)]:

@@ -5,22 +5,39 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ph_spline import CubicPHSpline, PHBSpline, PHSpline
+from ph_spline import (
+    CubicPHSpline,
+    CubicPHSplineClosed,
+    CubicPHSplineOpen,
+    PHBSpline,
+    PHBSplineClosed,
+    PHBSplineOpen,
+    PHSpline,
+)
 
 
-@pytest.fixture(params=[CubicPHSpline, PHBSpline])
+@pytest.fixture(params=[CubicPHSplineOpen, PHBSplineOpen])
 def curve(request) -> PHSpline:
     return request.param([[0.0, 0.0], [1.0, 0.4], [2.0, 1.1]])
 
 
-def test_concrete_spline_classes_are_direct_common_base_subclasses():
+def test_family_bases_are_siblings_and_concrete_topologies_are_siblings():
     assert CubicPHSpline.__bases__ == (PHSpline,)
     assert PHBSpline.__bases__ == (PHSpline,)
+    assert CubicPHSplineOpen.__bases__ == (CubicPHSpline,)
+    assert CubicPHSplineClosed.__bases__ == (CubicPHSpline,)
+    assert PHBSplineOpen.__bases__ == (PHBSpline,)
+    assert PHBSplineClosed.__bases__ == (PHBSpline,)
+    assert not issubclass(CubicPHSplineOpen, CubicPHSplineClosed)
+    assert not issubclass(CubicPHSplineClosed, CubicPHSplineOpen)
+    assert not issubclass(PHBSplineOpen, PHBSplineClosed)
+    assert not issubclass(PHBSplineClosed, PHBSplineOpen)
 
 
 def test_common_base_is_abstract():
-    with pytest.raises(TypeError):
-        PHSpline()
+    for abstract in (PHSpline, CubicPHSpline, PHBSpline):
+        with pytest.raises(TypeError):
+            abstract()
 
 
 def test_polymorphic_geometry_and_distance_contract(curve: PHSpline):

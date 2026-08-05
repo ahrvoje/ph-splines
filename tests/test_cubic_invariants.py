@@ -8,12 +8,12 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 
 def test_ph_identity(any_case):
     """z'(t) = w(t)^2 for every segment (invariant 4)."""
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     for seg in curve._segments:
         c = seg.ctrl
         for t in np.linspace(0.0, 1.0, 9):
@@ -40,7 +40,7 @@ def test_ph_identity(any_case):
 
 def test_regularity(any_case):
     """sigma(t) > 0 on every segment (invariant 3)."""
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     for seg in curve._segments:
         s_min, s_end_max = seg.sigma_extremes()
         assert s_min > 0.0
@@ -50,13 +50,13 @@ def test_regularity(any_case):
 
 
 def test_strictly_increasing_arc_length(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     prefix = curve._prefix
     assert all(b > a for a, b in pairwise(prefix))
 
 
 def test_control_polygon_admissibility(curved_case):
-    curve = CubicPHSpline(curved_case)
+    curve = CubicPHSplineOpen(curved_case)
     tau = curve._tau
     for seg in curve._segments:
         c = seg.ctrl
@@ -71,7 +71,7 @@ def test_control_polygon_admissibility(curved_case):
 
 
 def test_instance_attributes_frozen():
-    curve = CubicPHSpline([[0.0, 0.0], [1.0, 1.0]])
+    curve = CubicPHSplineOpen([[0.0, 0.0], [1.0, 1.0]])
     with pytest.raises(AttributeError):
         curve._scale = 2.0
     with pytest.raises(AttributeError):
@@ -82,7 +82,7 @@ def test_instance_attributes_frozen():
 
 def test_constructor_copies_input():
     pts = [[0.0, 0.0], [1.0, 0.2], [2.0, 0.8], [2.5, 1.6]]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     before = curve.point(0.5).copy()
     pts[1][0] = 99.0  # mutate the caller's list after construction
     pts[2] = [5.0, -5.0]
@@ -91,7 +91,7 @@ def test_constructor_copies_input():
 
 
 def test_returned_arrays_do_not_alias_state():
-    curve = CubicPHSpline([[0.0, 0.0], [1.0, 0.2], [2.0, 0.8], [2.5, 1.6]])
+    curve = CubicPHSplineOpen([[0.0, 0.0], [1.0, 0.2], [2.0, 0.8], [2.5, 1.6]])
     p = curve.point(0.0)
     p_orig = p.copy()
     p += 1000.0  # returned arrays are fresh; mutating them must be harmless
@@ -103,7 +103,7 @@ def test_returned_arrays_do_not_alias_state():
 
 
 def test_internal_arrays_read_only():
-    curve = CubicPHSpline([[0.0, 0.0], [1.0, 0.2], [2.0, 0.8], [2.5, 1.6]])
+    curve = CubicPHSplineOpen([[0.0, 0.0], [1.0, 0.2], [2.0, 0.8], [2.5, 1.6]])
     with pytest.raises(ValueError):
         curve._points[0, 0] = 1.0
     with pytest.raises(ValueError):
@@ -114,7 +114,7 @@ def test_internal_arrays_read_only():
 
 
 def test_return_types(curved_case):
-    curve = CubicPHSpline(curved_case)
+    curve = CubicPHSplineOpen(curved_case)
     u = 0.4
     for arr in (
         curve.point(u),

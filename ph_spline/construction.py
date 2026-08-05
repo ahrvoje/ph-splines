@@ -40,18 +40,23 @@ from ph_spline.segment import PHSegment
 
 __all__ = [
     "BoundaryAngles",
+    "ClosedGeometry",
     "Geometry",
     "InflectionData",
     "InputGeometry",
     "SplineBlock",
     "SplinePlan",
     "analyze_geometry",
+    "analyze_closed_geometry",
     "block_geometry",
     "boundary_angles",
     "build_curved_segments",
+    "build_closed_curved_segments",
     "build_straight_segments",
     "edge_quantities",
     "initial_internal_fractions",
+    "initial_closed_fractions",
+    "chord_weighted_closed_fractions",
     "plan_spline",
     "segment_alpha_beta",
     "sinc",
@@ -169,6 +174,27 @@ class Geometry:
     lhat: np.ndarray
     unit: np.ndarray
     is_straight: bool
+    tau: int
+    psi: np.ndarray
+    phi: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
+class ClosedGeometry:
+    """Normalized strictly-convex cyclic data for the closed G2 solver.
+
+    ``points`` contains each authoritative interpolation point exactly once;
+    ``phat`` repeats the first normalized point at the end so segment ``i``
+    always joins rows ``i`` and ``i + 1``.  ``phi[i]`` is the positive
+    oriented turn from chord ``i - 1`` to chord ``i`` at point ``i``.
+    """
+
+    points: np.ndarray
+    origin: np.ndarray
+    scale: float
+    phat: np.ndarray
+    lhat: np.ndarray
+    unit: np.ndarray
     tau: int
     psi: np.ndarray
     phi: np.ndarray
@@ -302,6 +328,163 @@ def analyze_geometry(points: np.ndarray) -> InputGeometry:
         turn_signs=signs,
         turn_angles=angles,
         is_straight=False,
+    )
+
+
+def analyze_closed_geometry(points: np.ndarray) -> ClosedGeometry:
+    """Validate and normalize a strictly-convex cyclic point sequence.
+
+    Closed cubic PH construction currently promises G2 at every join.  A
+    regular cubic PH segment has one curvature sign, so this first cyclic
+    profile accepts only simple, strictly-convex polygons and rejects data
+    that would require an inflection or a straight/curved transition.
+    """
+    n = points.shape[0]
+    if n < 3:
+        raise InsufficientPointDataError(
+            "At least three distinct points are required for a closed spline",
+            quantity="len(points)",
+            value=n,
+            bound=">= 3",
+        )
+    if points[0, 0] == points[-1, 0] and points[0, 1] == points[-1, 1]:
+        raise DegeneratePointDataError(
+            "Closed input lists the seam point twice; provide each cyclic point once",
+            index=(0, n - 1),
+            quantity="seam point",
+            value=(float(points[0, 0]), float(points[0, 1])),
+        )
+    seen: dict[tuple[float, float], int] = {}
+    for i, point in enumerate(points):
+        key = (float(point[0]) + 0.0, float(point[1]) + 0.0)
+        previous = seen.get(key)
+        if previous is not None:
+            raise NonSimplePointDataError(
+                "Closed interpolation points must be pairwise distinct",
+                index=(previous, i),
+                quantity="point",
+                value=key,
+            )
+        seen[key] = i
+
+    closed_points = np.vstack((points, points[:1]))
+    with np.errstate(over="ignore", invalid="ignore"):
+        deltas = np.diff(closed_points, axis=0)
+    if not np.all(np.isfinite(deltas)):
+        raise NumericalPrecisionError(
+            "Closed chord vector overflowed during normalization",
+            quantity="P[(i+1) mod n] - P[i]",
+        )
+    lengths = np.hypot(deltas[:, 0], deltas[:, 1])
+    if not np.all(np.isfinite(lengths)):
+        raise NumericalPrecisionError(
+            "Closed chord length overflowed during normalization",
+            quantity="|P[(i+1) mod n] - P[i]|",
+        )
+    if np.any(lengths == 0.0):
+        i = int(np.argmin(lengths))
+        raise DegeneratePointDataError(
+            "Adjacent cyclic input points coincide",
+            index=(i, (i + 1) % n),
+            quantity="chord length",
+            value=0.0,
+            bound="> 0",
+        )
+    scale = float(np.max(lengths))
+    ratio = float(np.min(lengths)) / scale
+    if not ratio > CHORD_RATIO_MIN:
+        raise NumericalPrecisionError(
+            "Shortest closed chord is not distinguishable from the longest chord",
+            index=int(np.argmin(lengths)),
+            quantity="min|dP| / max|dP|",
+            value=ratio,
+            bound=f"> {CHORD_RATIO_MIN:.3e}",
+        )
+    origin = points[0].copy()
+    with np.errstate(over="ignore", invalid="ignore"):
+        phat = (closed_points - origin) / scale
+    if not np.all(np.isfinite(phat)):
+        raise NumericalPrecisionError(
+            "Normalized closed coordinates overflowed",
+            quantity="(P - O) / H",
+        )
+    lhat = lengths / scale
+    unit = deltas / lengths[:, None]
+
+    incoming = np.roll(unit, 1, axis=0)
+    cross = incoming[:, 0] * unit[:, 1] - incoming[:, 1] * unit[:, 0]
+    dot = incoming[:, 0] * unit[:, 0] + incoming[:, 1] * unit[:, 1]
+    tiny = np.abs(cross) <= COLLINEAR_EPS
+    reversal = tiny & (dot < 0.0)
+    if np.any(reversal):
+        i = int(np.argmax(reversal))
+        raise ReversalError(
+            "Closed polygon contains a reversal of approximately pi",
+            index=i,
+            quantity="normalized turn cross product",
+            value=float(cross[i]),
+            bound=f"|c| > {COLLINEAR_EPS:.3e} or forward dot > 0",
+        )
+    if np.any(tiny):
+        i = int(np.argmax(tiny))
+        raise InterpolationDomainError(
+            "Closed cubic G2 construction requires strictly convex cyclic data",
+            index=i,
+            quantity="absolute normalized turn cross product",
+            value=abs(float(cross[i])),
+            bound=f"> {COLLINEAR_EPS:.3e}",
+        )
+    signs = np.sign(cross).astype(np.int8)
+    if not np.all(signs == signs[0]):
+        i = int(np.argmax(signs != signs[0]))
+        raise InterpolationDomainError(
+            "Closed cubic G2 construction does not admit curvature-sign changes",
+            index=i,
+            quantity="cyclic turn sign",
+            value=int(signs[i]),
+            bound=f"== {int(signs[0])}",
+        )
+    tau = int(signs[0])
+    crossing = polyline_self_intersection(phat)
+    if crossing is not None:
+        raise NonSimplePointDataError(
+            "Strictly convex closed polygon contains intersecting chords",
+            index=crossing,
+            quantity="chord pair",
+        )
+    phi = np.arctan2(tau * cross, dot)
+    if np.any(phi <= 0.0):
+        i = int(np.argmax(phi <= 0.0))
+        raise InterpolationDomainError(
+            "Closed polygon contains a nonpositive oriented turn",
+            index=i,
+            quantity="phi",
+            value=float(phi[i]),
+            bound="> 0",
+        )
+    total_turn = math.fsum(float(value) for value in phi)
+    turn_tolerance = 4096.0 * EPS * max(1, n)
+    if abs(total_turn - 2.0 * math.pi) > turn_tolerance:
+        raise InterpolationDomainError(
+            "Closed polygon does not have the required simple convex winding",
+            quantity="sum(phi)",
+            value=total_turn,
+            bound=f"within {turn_tolerance:.3e} of 2*pi",
+        )
+    psi = np.empty(n, dtype=np.float64)
+    psi[0] = math.atan2(float(unit[0, 1]), float(unit[0, 0]))
+    if n > 1:
+        psi[1:] = psi[0] + tau * np.cumsum(phi[1:])
+    return ClosedGeometry(
+        points=np.array(points, copy=True),
+        origin=origin,
+        scale=scale,
+        phat=phat,
+        lhat=lhat,
+        unit=unit,
+        tau=tau,
+        psi=psi,
+        phi=phi,
     )
 
 
@@ -1035,6 +1218,35 @@ def chord_weighted_fractions(geometry: Geometry) -> np.ndarray:
     return np.clip(x0, X_MIN, 1.0 - X_MIN)
 
 
+def initial_closed_fractions(geometry: ClosedGeometry) -> np.ndarray:
+    """Cyclic centered-secant tangent fractions in their convex wedges."""
+    n = geometry.points.shape[0]
+    result = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        previous = geometry.phat[(i - 1) % n]
+        following = geometry.phat[(i + 1) % n]
+        vx = float(following[0] - previous[0])
+        vy = float(following[1] - previous[1])
+        theta = math.atan2(vy, vx)
+        incoming_angle = (
+            float(geometry.psi[i - 1])
+            if i > 0
+            else float(geometry.psi[0] - geometry.tau * geometry.phi[0])
+        )
+        relative = geometry.tau * _wrap_pi(theta - incoming_angle)
+        result[i] = min(
+            max(relative / float(geometry.phi[i]), X_MIN), 1.0 - X_MIN
+        )
+    return result
+
+
+def chord_weighted_closed_fractions(geometry: ClosedGeometry) -> np.ndarray:
+    """Cyclic chord-length initializer for highly unequal adjacent chords."""
+    incoming = np.roll(geometry.lhat, 1)
+    result = incoming / (incoming + geometry.lhat)
+    return np.clip(result, X_MIN, 1.0 - X_MIN)
+
+
 # ---------------------------------------------------------------------------
 # PH edge lengths from tangent deviations (spec section 8)
 # ---------------------------------------------------------------------------
@@ -1283,6 +1495,84 @@ def build_curved_segments(
                 w1=w1,
                 chi_stable=chi,
                 ctrl=ctrl,
+            )
+        )
+    return segments, residuals
+
+
+def build_closed_curved_segments(
+    geometry: ClosedGeometry, x: np.ndarray
+) -> tuple[list[PHSegment], np.ndarray]:
+    """Construct and strictly verify all segments of a convex cyclic spline."""
+    n = geometry.points.shape[0]
+    if x.shape != (n,):
+        raise SplineConvergenceError(
+            "Closed tangent solution has the wrong dimension",
+            quantity="shape(x)",
+            value=x.shape,
+            bound=f"== ({n},)",
+        )
+    phi = geometry.phi
+    alpha = (1.0 - x) * phi
+    beta = np.roll(x * phi, -1)
+    _, _, lam0, lam1, beta1, xi1_err = edge_quantities(
+        alpha, beta, geometry.lhat, guarded=False
+    )
+    lam0 = np.asarray(lam0, dtype=np.float64)
+    lam1 = np.asarray(lam1, dtype=np.float64)
+    beta1 = np.asarray(beta1, dtype=np.float64)
+    xi1_err = np.asarray(xi1_err, dtype=np.float64)
+
+    log_sin = np.log(np.sin(beta1))
+    log_l0 = np.log(lam0)
+    log_l1 = np.log(lam1)
+    log_k_end = log_sin + 0.5 * log_l0 - 1.5 * log_l1
+    log_k_start = log_sin + 0.5 * log_l1 - 1.5 * log_l0
+    residuals = np.roll(log_k_end, 1) - log_k_start
+
+    theta = np.empty(n + 1, dtype=np.float64)
+    theta[0] = geometry.psi[0] - geometry.tau * (1.0 - x[0]) * phi[0]
+    if n > 1:
+        theta[1:n] = geometry.psi[: n - 1] + geometry.tau * x[1:] * phi[1:]
+    theta[n] = theta[0] + geometry.tau * 2.0 * math.pi
+
+    segments: list[PHSegment] = []
+    for i in range(n):
+        w0 = cmath.rect(math.sqrt(3.0 * float(lam0[i])), 0.5 * float(theta[i]))
+        w1 = cmath.rect(
+            math.sqrt(3.0 * float(lam1[i])), 0.5 * float(theta[i + 1])
+        )
+        p0 = complex(geometry.phat[i, 0], geometry.phat[i, 1])
+        p1 = complex(geometry.phat[i + 1, 0], geometry.phat[i + 1, 1])
+        recon = (w0 * w0 + w0 * w1 + w1 * w1) / 3.0
+        target = p1 - p0
+        error = abs(recon - target)
+        l0, l1 = float(lam0[i]), float(lam1[i])
+        ratio_amp = 1.0 + 0.5 * (math.sqrt(l0 / l1) + math.sqrt(l1 / l0))
+        tolerance = RECON_TOL * max(float(geometry.lhat[i]), 3.0 * l0, 3.0 * l1) + (
+            16.0 * float(geometry.lhat[i]) * float(xi1_err[i]) * ratio_amp
+        )
+        if not error <= tolerance:
+            raise SplineConvergenceError(
+                "Closed PH segment reconstruction residual exceeds tolerance",
+                index=i,
+                quantity="|(w0^2 + w0 w1 + w1^2)/3 - dP|",
+                value=error,
+                bound=f"<= {tolerance:.3e}",
+            )
+        chi = (
+            3.0
+            * geometry.tau
+            * math.sqrt(l0 * l1)
+            * math.sin(float(beta1[i]))
+        )
+        segments.append(
+            PHSegment(
+                index=i,
+                w0=w0,
+                w1=w1,
+                chi_stable=chi,
+                ctrl=PHSegment.control_net(p0, p1, w0, w1),
             )
         )
     return segments, residuals

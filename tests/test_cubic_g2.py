@@ -11,11 +11,11 @@ from itertools import pairwise
 
 import numpy as np
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 
 def test_g2_at_all_joins(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     segments = curve._segments
     for left, right in pairwise(segments):
         tl = left.tangent_local(1.0)
@@ -29,7 +29,7 @@ def test_g2_at_all_joins(any_case):
 
 def test_public_two_sided_limits(curved_case):
     """Approaching a knot from both sides through the public API agrees."""
-    curve = CubicPHSpline(curved_case)
+    curve = CubicPHSplineOpen(curved_case)
     m = curve._m
     for j in range(1, m):
         u = j / m
@@ -48,14 +48,14 @@ def test_public_two_sided_limits(curved_case):
 
 
 def test_signed_curvature_single_sign(curved_case):
-    curve = CubicPHSpline(curved_case)
+    curve = CubicPHSplineOpen(curved_case)
     kappas = [curve.signed_curvature(float(u)) for u in np.linspace(0, 1, 201)]
     signs = {math.copysign(1.0, k) for k in kappas}
     assert len(signs) == 1
 
 
 def test_chi_sign_uniform(curved_case):
-    curve = CubicPHSpline(curved_case)
+    curve = CubicPHSplineOpen(curved_case)
     chis = [seg.chi for seg in curve._segments]
     assert all(c != 0.0 for c in chis)
     assert len({math.copysign(1.0, c) for c in chis}) == 1

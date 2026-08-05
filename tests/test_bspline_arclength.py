@@ -1,4 +1,4 @@
-"""Analytic PHBSpline length, inversion, relative travel, and batches."""
+"""Analytic PHBSplineOpen length, inversion, relative travel, and batches."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ import math
 import numpy as np
 import pytest
 
-from ph_spline import LengthCoordinate, PHBSpline
+from ph_spline import LengthCoordinate, PHBSplineClosed, PHBSplineOpen
 
 POINTS = [[0.0, 0.0], [1.0, 0.4], [2.0, -0.7], [3.0, 1.1], [2.2, 2.0]]
 
 
 @pytest.fixture(scope="module", params=[2, 4, 8])
 def curve(request):
-    return PHBSpline(POINTS, g_order=request.param)
+    return PHBSplineOpen(POINTS, g_order=request.param)
 
 
 def test_span_arc_coefficients_are_analytic_antiderivatives(curve):
@@ -89,7 +89,7 @@ def test_relative_location_travel_avoids_global_composition(curve):
 
 def test_closed_forward_distance_wraps():
     angles = np.linspace(0.0, 2.0 * np.pi, 9, endpoint=False)
-    closed = PHBSpline(np.column_stack((np.cos(angles), np.sin(angles))), closed=True)
+    closed = PHBSplineClosed(np.column_stack((np.cos(angles), np.sin(angles))))
     expected = (
         closed.length + float(closed.arc_length(0.1)) - float(closed.arc_length(0.9))
     )

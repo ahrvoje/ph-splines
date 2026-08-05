@@ -1,4 +1,4 @@
-"""Render 128 PHBSpline-specific examples (8 feature families x 16 cases).
+"""Render 128 PHBSplineOpen-specific examples (8 feature families x 16 cases).
 
 Run from the repository root:
     python examples/bspline/generate_features.py
@@ -20,7 +20,7 @@ from examples.bspline._common import (
     normalized_vectors,
     render_curve,
 )
-from ph_spline import PHBSpline
+from ph_spline import PHBSplineClosed, PHBSplineOpen
 
 OUT = Path(__file__).resolve().parent / "features"
 ORDERS = (2, 3, 4, 6, 8)
@@ -50,7 +50,7 @@ def main() -> None:
     for case in range(16):
         order = ORDERS[case % len(ORDERS)]
 
-        curve = PHBSpline(open_points(case), g_order=order)
+        curve = PHBSplineOpen(open_points(case), g_order=order)
         render_curve(
             curve,
             output(1, case, "continuity_orders"),
@@ -59,7 +59,7 @@ def main() -> None:
         )
         count += 1
 
-        curve = PHBSpline(closed_points(case), closed=True, g_order=order)
+        curve = PHBSplineClosed(closed_points(case), g_order=order)
         stations = np.linspace(0.0, curve.length, 13, endpoint=False)
         station_u = curve.parameters_at_length(stations, assume_sorted=True)
         vectors = normalized_vectors(curve, station_u, curve.tangent)
@@ -72,7 +72,7 @@ def main() -> None:
         )
         count += 1
 
-        curve = PHBSpline(open_points(case, 14), g_order=order)
+        curve = PHBSplineOpen(open_points(case, 14), g_order=order)
         before = normalized_samples(curve)
         index = 4 + case % 6
         handle = curve.point_handle(index)
@@ -87,7 +87,7 @@ def main() -> None:
         )
         count += 1
 
-        curve = PHBSpline(open_points(case, 13), g_order=order)
+        curve = PHBSplineOpen(open_points(case, 13), g_order=order)
         before = normalized_samples(curve)
         index = 3 + case % 7
         midpoint = 0.5 * (curve.points[index - 1] + curve.points[index])
@@ -102,7 +102,7 @@ def main() -> None:
         )
         count += 1
 
-        curve = PHBSpline(open_points(case, 15), g_order=order)
+        curve = PHBSplineOpen(open_points(case, 15), g_order=order)
         before = normalized_samples(curve)
         index = 4 + case % 7
         handle = curve.point_handle(index)
@@ -116,7 +116,7 @@ def main() -> None:
         )
         count += 1
 
-        curve = PHBSpline(open_points(case), g_order=max(order, 4))
+        curve = PHBSplineOpen(open_points(case), g_order=max(order, 4))
         derivative_order = 1 + case % 4
         us = np.linspace(0.08, 0.92, 15)
         vectors = normalized_vectors(
@@ -133,7 +133,7 @@ def main() -> None:
         )
         count += 1
 
-        curve = PHBSpline(open_points(case), g_order=max(order, 4))
+        curve = PHBSplineOpen(open_points(case), g_order=max(order, 4))
         derivative_order = 1 + case % 4
         us = np.linspace(0.08, 0.92, 15)
         vectors = normalized_vectors(
@@ -154,7 +154,7 @@ def main() -> None:
         )
         count += 1
 
-        curve = PHBSpline(open_points(case), g_order=max(order, 4))
+        curve = PHBSplineOpen(open_points(case), g_order=max(order, 4))
         derivative_order = case % 4
         us = np.linspace(0.08, 0.92, 15)
         vectors = normalized_vectors(
@@ -173,7 +173,7 @@ def main() -> None:
 
         print(f"ok feature case {case + 1:02d}/16 ({count}/128)")
     assert count == 128
-    print(f"Rendered all {count} PHBSpline-specific examples to {OUT}")
+    print(f"Rendered all {count} PHBSplineOpen-specific examples to {OUT}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from ph_spline import (
-    CubicPHSpline,
+    CubicPHSplineOpen,
     InterpolationDomainError,
     UndefinedPrincipalNormalError,
 )
@@ -17,7 +17,7 @@ S_POINTS = [[0.0, 0.0], [1.0, 0.0], [2.0, 1.0], [3.0, 0.0]]
 
 
 def test_single_inflection_inserts_exactly_one_auxiliary_point():
-    curve = CubicPHSpline(S_POINTS)
+    curve = CubicPHSplineOpen(S_POINTS)
     assert len(curve._inflections) == 1
     assert len(curve._segments) == len(S_POINTS)
     info = curve._inflections[0]
@@ -31,7 +31,7 @@ def test_single_inflection_inserts_exactly_one_auxiliary_point():
 
 
 def test_aux_inflection_points_public_api():
-    curve = CubicPHSpline(S_POINTS)
+    curve = CubicPHSplineOpen(S_POINTS)
     points = curve.aux_inflection_points
 
     assert len(points) == 1
@@ -46,12 +46,12 @@ def test_aux_inflection_points_public_api():
 
 
 def test_aux_inflection_points_is_empty_without_insertions():
-    curve = CubicPHSpline([[0.0, 0.0], [1.0, 0.4], [2.0, 1.3], [2.6, 2.4]])
+    curve = CubicPHSplineOpen([[0.0, 0.0], [1.0, 0.4], [2.0, 1.3], [2.6, 2.4]])
     assert curve.aux_inflection_points == []
 
 
 def test_aux_inflection_points_returns_fresh_mutable_data():
-    curve = CubicPHSpline(S_POINTS)
+    curve = CubicPHSplineOpen(S_POINTS)
     points = curve.aux_inflection_points
     points[0]["x"] = math.inf
     points.append({"u": 0.0, "s": 0.0, "x": 0.0, "y": 0.0})
@@ -61,7 +61,7 @@ def test_aux_inflection_points_returns_fresh_mutable_data():
 
 
 def test_inflection_joint_is_prescribed_g1_with_sign_flip():
-    curve = CubicPHSpline(S_POINTS)
+    curve = CubicPHSplineOpen(S_POINTS)
     j = curve._joint_kinds.index("inflection") + 1
     left, right = curve._segments[j - 1], curve._segments[j]
     d = np.array(curve._inflections[0].tangent)
@@ -79,7 +79,7 @@ def test_inflection_joint_is_prescribed_g1_with_sign_flip():
 
 def test_alternating_turns_insert_one_point_per_inflection_span():
     pts = [[0.0, 0.0], [1.0, 0.0], [2.0, 1.0], [3.0, 0.0], [4.0, 1.0]]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     assert [info.span_index for info in curve._inflections] == [1, 2]
     assert len(curve._segments) == len(pts) - 1 + 2
     assert curve._joint_kinds.count("inflection") == 2
@@ -95,7 +95,7 @@ def test_alternating_turns_insert_one_point_per_inflection_span():
 
 def test_mixed_straight_curved_transition_is_g1_not_g2():
     pts = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 1.0], [3.0, 2.0]]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     j = curve._joint_kinds.index("transition") + 1
     left, right = curve._segments[j - 1], curve._segments[j]
     assert left.chi == 0.0
@@ -108,7 +108,7 @@ def test_mixed_straight_curved_transition_is_g1_not_g2():
 
 def test_sign_change_separated_by_straight_run_has_no_auxiliary_point():
     pts = [[0.0, 0.0], [1.0, 0.0], [2.0, 1.0], [3.0, 2.0], [4.0, 2.0]]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     assert curve._inflections == ()
     assert curve._joint_kinds == ("transition", "g2", "transition")
     assert [
@@ -117,7 +117,7 @@ def test_sign_change_separated_by_straight_run_has_no_auxiliary_point():
 
 
 def test_auxiliary_parameter_and_arc_length_round_trips():
-    curve = CubicPHSpline(S_POINTS)
+    curve = CubicPHSplineOpen(S_POINTS)
     for j, u in enumerate(curve._knots):
         s = curve.arc_length(float(u))
         assert curve.parameter_at_length(s) == float(u)
@@ -130,8 +130,8 @@ def test_auxiliary_parameter_and_arc_length_round_trips():
 
 
 def test_inflection_recipe_is_bitwise_deterministic():
-    first = CubicPHSpline(S_POINTS)
-    second = CubicPHSpline(S_POINTS)
+    first = CubicPHSplineOpen(S_POINTS)
+    second = CubicPHSplineOpen(S_POINTS)
     assert first._inflections == second._inflections
     assert np.array_equal(first._knots, second._knots)
     for a, b in zip(first._segments, second._segments):
@@ -141,7 +141,7 @@ def test_inflection_recipe_is_bitwise_deterministic():
 
 def test_deterministic_midpoint_tilt_fallback():
     pts = [[0.0, 0.0], [1.0, 0.0], [-2.0, -2.0], [0.0, -1.0]]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     info = curve._inflections[0]
     assert info.fallback
     assert info.rho == 0.5
@@ -168,13 +168,13 @@ def test_nonconsecutive_duplicate_in_different_blocks_is_accepted():
         [-1.0, -1.0],
         [-2.0, 0.0],
     ]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     assert np.array_equal(curve.point(0.0), curve.point(4.0 / 6.0))
 
 
 def test_chords_in_different_convex_blocks_may_cross():
     pts = [[0.0, 0.0], [-2.0, -2.0], [-1.0, 1.0], [-2.0, 1.0], [-1.0, -2.0]]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     assert len(curve._inflections) == 1
     assert "inflection" in curve._joint_kinds
 
@@ -190,7 +190,7 @@ def test_prescribed_transition_tangent_is_never_clamped():
             ]
         )
     with pytest.raises(InterpolationDomainError, match="Prescribed start tangent"):
-        CubicPHSpline(pts)
+        CubicPHSplineOpen(pts)
 
 
 def test_free_boundary_can_clamp_next_to_prescribed_single_segment():
@@ -202,6 +202,6 @@ def test_free_boundary_can_clamp_next_to_prescribed_single_segment():
                 pts[-1][1] + math.sin(heading),
             ]
         )
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     assert curve._boundary_clamped == (True, False)
     assert curve._joint_kinds == ("transition", "g2")

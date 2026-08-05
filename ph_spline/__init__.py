@@ -1,13 +1,16 @@
 """Planar Pythagorean-hodograph spline interpolation and editing.
 
-Public namespace: :class:`CubicPHSpline`, :class:`PHBSpline`, their policy
-and value types, and the documented exception hierarchies.
+The public namespace exposes the abstract :class:`CubicPHSpline` and
+:class:`PHBSpline` family bases, their concrete open/closed topology classes,
+policy and value types, and the documented exception hierarchies.
 """
 
 from ph_spline.base import PHSpline
 from ph_spline.bspline import (
     PHBSpline,
+    PHBSplineClosed,
     PHBSplineEditTransaction,
+    PHBSplineOpen,
     PHBSplineSnapshot,
 )
 from ph_spline.bspline_types import (
@@ -25,7 +28,7 @@ from ph_spline.bspline_types import (
     NumericalPolicy,
     PointHandle,
 )
-from ph_spline.cubic import CubicPHSpline
+from ph_spline.cubic import CubicPHSpline, CubicPHSplineClosed, CubicPHSplineOpen
 from ph_spline.exceptions import (
     ArcLengthInversionError,
     ArcLengthOutOfRangeError,
@@ -77,9 +80,11 @@ __all__ = [
     "ContinuitySpecificationError",
     "ContinuityVerificationError",
     "CubicPHSpline",
+    "CubicPHSplineClosed",
     "CubicPHSplineError",
     "CubicPHSplineRuntimeError",
     "CubicPHSplineValueError",
+    "CubicPHSplineOpen",
     "CurveLocation",
     "DegeneratePointDataError",
     "DiscontinuousDerivativeError",
@@ -104,8 +109,10 @@ __all__ = [
     "NumericalPolicy",
     "NumericalPrecisionError",
     "PHBSpline",
+    "PHBSplineClosed",
     "PHBSplineEditTransaction",
     "PHBSplineError",
+    "PHBSplineOpen",
     "PHBSplineRuntimeError",
     "PHBSplineSnapshot",
     "PHBSplineValueError",

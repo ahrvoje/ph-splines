@@ -23,7 +23,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 SIZES = [100, 1_000, 10_000]
 QUERIES = 1_000
@@ -48,14 +48,14 @@ def nonconvex_points(n: int) -> list[list[float]]:
     return [[float(x), float(0.18 * x**3)] for x in xs]
 
 
-def bench_one(pts: list[list[float]]) -> tuple[float, float, CubicPHSpline]:
+def bench_one(pts: list[list[float]]) -> tuple[float, float, CubicPHSplineOpen]:
     n = len(pts)
     best_build = math.inf
     curve = None
     reps = REPS if n <= 1_000 else max(1, REPS - 1)
     for _ in range(reps):
         t0 = time.perf_counter()
-        curve = CubicPHSpline(pts)
+        curve = CubicPHSplineOpen(pts)
         best_build = min(best_build, time.perf_counter() - t0)
     assert curve is not None
 

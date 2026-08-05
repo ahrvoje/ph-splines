@@ -9,7 +9,7 @@ import pytest
 
 from ph_spline import (
     ArcLengthOutOfRangeError,
-    CubicPHSpline,
+    CubicPHSplineOpen,
     CubicPHSplineError,
     CubicPHSplineValueError,
     InsufficientPointDataError,
@@ -39,7 +39,7 @@ GOOD = [[0.0, 0.0], [1.0, 0.2], [2.0, 0.8], [2.5, 1.6]]
 )
 def test_outer_container_must_be_list(bad):
     with pytest.raises(InvalidPointDataError):
-        CubicPHSpline(bad)
+        CubicPHSplineOpen(bad)
 
 
 @pytest.mark.parametrize(
@@ -57,7 +57,7 @@ def test_outer_container_must_be_list(bad):
 )
 def test_malformed_point_element(bad_element):
     with pytest.raises(InvalidPointDataError):
-        CubicPHSpline([[0.0, 0.0], bad_element])
+        CubicPHSplineOpen([[0.0, 0.0], bad_element])
 
 
 @pytest.mark.parametrize(
@@ -66,30 +66,35 @@ def test_malformed_point_element(bad_element):
 )
 def test_bad_coordinate_types(bad_coord):
     with pytest.raises(InvalidPointDataError):
-        CubicPHSpline([[0.0, 0.0], [bad_coord, 1.0]])
+        CubicPHSplineOpen([[0.0, 0.0], [bad_coord, 1.0]])
 
 
 @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf, np.float64("nan")])
 def test_nonfinite_coordinates(bad):
     with pytest.raises(NonFiniteCoordinateError):
-        CubicPHSpline([[0.0, 0.0], [1.0, bad]])
+        CubicPHSplineOpen([[0.0, 0.0], [1.0, bad]])
 
 
 @pytest.mark.parametrize("pts", [[], [[0.0, 0.0]]])
 def test_insufficient_points(pts):
     with pytest.raises(InsufficientPointDataError):
-        CubicPHSpline(pts)
+        CubicPHSplineOpen(pts)
 
 
 def test_numpy_scalar_coordinates_accepted():
     pts = [[np.float64(0.0), np.int64(0)], (np.float32(1.0), np.float64(1.0))]
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     assert curve.point(0.0).tolist() == [0.0, 0.0]
+
+
+def test_open_constructor_exposes_documented_points_keyword():
+    curve = CubicPHSplineOpen(points=GOOD)
+    assert curve.num_points == len(GOOD)
 
 
 def test_value_errors_are_value_errors():
     with pytest.raises(ValueError):
-        CubicPHSpline([[0.0, 0.0]])
+        CubicPHSplineOpen([[0.0, 0.0]])
     assert issubclass(InvalidPointDataError, CubicPHSplineError)
     assert issubclass(InvalidPointDataError, CubicPHSplineValueError)
 
@@ -101,7 +106,7 @@ def test_value_errors_are_value_errors():
 
 @pytest.fixture(scope="module")
 def curve():
-    return CubicPHSpline(GOOD)
+    return CubicPHSplineOpen(GOOD)
 
 
 ALL_U_METHODS = [
@@ -201,7 +206,7 @@ def test_normal_side_rejection(curve, bad):
 
 def test_exception_diagnostic_fields():
     try:
-        CubicPHSpline([[0.0, 0.0], [1.0, math.inf]])
+        CubicPHSplineOpen([[0.0, 0.0], [1.0, math.inf]])
     except NonFiniteCoordinateError as exc:
         assert exc.index == 1
         assert exc.quantity == "coordinate"

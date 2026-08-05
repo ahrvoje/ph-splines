@@ -3,7 +3,7 @@
 Run:  python examples/cubic/generate_examples.py
 Output: examples/cubic/base/NN_name.png
 
-Every example is fully constructed by ``CubicPHSpline`` and passes an
+Every example is fully constructed by ``CubicPHSplineOpen`` and passes an
 independent invariant spot-check before it is drawn.
 """
 

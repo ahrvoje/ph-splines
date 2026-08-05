@@ -1,4 +1,4 @@
-"""Three reproducible PHBSpline benchmark sections.
+"""Three reproducible PHBSplineOpen benchmark sections.
 
 Run:  python benchmarks/benchmark_bspline.py
 
@@ -31,7 +31,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
-from ph_spline import PHBSpline
+from ph_spline import PHBSplineOpen
 
 SIZES = (100, 1_000, 10_000)
 HIGH_ORDERS = (3, 4, 6, 8)
@@ -71,18 +71,18 @@ def best_time(action: Callable[[], object], repetitions: int = 3) -> float:
     return best
 
 
-def construct(points: np.ndarray, order: int = 2) -> tuple[PHBSpline, float]:
-    holder: list[PHBSpline] = []
+def construct(points: np.ndarray, order: int = 2) -> tuple[PHBSplineOpen, float]:
+    holder: list[PHBSplineOpen] = []
 
     def action() -> None:
-        holder[:] = [PHBSpline(points, g_order=order)]
+        holder[:] = [PHBSplineOpen(points, g_order=order)]
 
     repetitions = 1 if len(points) >= 10_000 else 2
     elapsed = best_time(action, repetitions)
     return holder[0], elapsed
 
 
-def query_time(curve: PHBSpline) -> float:
+def query_time(curve: PHBSplineOpen) -> float:
     rng = np.random.default_rng(20260805)
     targets = curve.length * rng.random(QUERIES)
 
@@ -134,7 +134,7 @@ def section_3(sizes: tuple[int, ...]) -> None:
     for n in sizes:
         points = editing_points(n)
         for order in EDIT_ORDERS:
-            curve = PHBSpline(points, g_order=order)
+            curve = PHBSplineOpen(points, g_order=order)
             center = curve.num_points // 2
             original = curve.points[center]
             moved = original + [0.0, 1.0e-3]

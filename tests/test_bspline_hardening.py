@@ -1,4 +1,4 @@
-"""Adversarial PHBSpline construction and query hardening."""
+"""Adversarial PHBSplineOpen construction and query hardening."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import warnings
 import numpy as np
 import pytest
 
-from ph_spline import PHBSpline, PHBSplineError
+from ph_spline import PHBSplineOpen, PHBSplineError
 
 
 def test_geometric_spacing_uses_canonical_shared_knot_jets():
@@ -24,7 +24,7 @@ def test_geometric_spacing_uses_canonical_shared_knot_jets():
                 points[-1][1] + length * math.sin(angle),
             ]
         )
-    curve = PHBSpline(points)
+    curve = PHBSplineOpen(points)
     assert curve.diagnostics.max_continuity_residual <= (
         curve.diagnostics.continuity_bound
     )
@@ -46,7 +46,7 @@ def test_geometric_spacing_uses_canonical_shared_knot_jets():
 def test_named_adversarial_shapes_construct_without_warnings(points, order):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        curve = PHBSpline(points, g_order=order)
+        curve = PHBSplineOpen(points, g_order=order)
         assert curve.length > 0.0
         for u in np.linspace(0.0, 1.0, 33):
             assert np.all(np.isfinite(curve.point(float(u))))
@@ -64,7 +64,7 @@ def test_seeded_random_walk_fuzz(seed):
     scale = 10.0 ** rng.uniform(-100.0, 100.0)
     points *= scale
     try:
-        curve = PHBSpline(points, g_order=4)
+        curve = PHBSplineOpen(points, g_order=4)
     except PHBSplineError:
         # A typed regularity/precision failure is allowed for a path whose
         # chord dynamic range is deliberately adversarial.
@@ -79,7 +79,7 @@ def test_seeded_random_walk_fuzz(seed):
 def test_long_curve_query_cost_does_not_change_results():
     x = np.linspace(0.0, 40.0, 1001)
     points = np.column_stack((x, np.sin(x)))
-    curve = PHBSpline(points)
+    curve = PHBSplineOpen(points)
     targets = np.linspace(0.0, curve.length, 257)
     parameters = curve.parameters_at_length(targets, assume_sorted=True)
     assert np.all(np.diff(parameters) > 0.0)

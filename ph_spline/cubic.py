@@ -1,9 +1,10 @@
-"""Public :class:`CubicPHSpline` class and global parameter dispatch."""
+"""Cubic PH spline family, open and cyclic G2 concrete topologies."""
 
 from __future__ import annotations
 
 import math
 import numbers
+from dataclasses import replace
 
 import numpy as np
 
@@ -19,17 +20,24 @@ from ph_spline.arclength import compensated_prefix_sums
 from ph_spline.base import PHSpline
 from ph_spline.construction import (
     analyze_geometry,
+    analyze_closed_geometry,
     block_geometry,
     boundary_angles,
     build_curved_segments,
+    build_closed_curved_segments,
     build_straight_segments,
     initial_internal_fractions,
+    initial_closed_fractions,
+    chord_weighted_closed_fractions,
     plan_spline,
     validate_points,
 )
 from ph_spline.exceptions import (
     ArcLengthOutOfRangeError,
+    DegeneratePointDataError,
     G2VerificationError,
+    InsufficientPointDataError,
+    InterpolationDomainError,
     LengthResolutionError,
     NonAdmissibleSegmentError,
     NonRegularSplineError,
@@ -38,11 +46,11 @@ from ph_spline.exceptions import (
     SplineConvergenceError,
     UndefinedPrincipalNormalError,
 )
-from ph_spline.nonlinear import solve_internal_tangents
+from ph_spline.nonlinear import solve_closed_tangents, solve_internal_tangents
 from ph_spline.segment import PHSegment
 from ph_spline.typing import PointSequence, Vector2
 
-__all__ = ["CubicPHSpline"]
+__all__ = ["CubicPHSpline", "CubicPHSplineClosed", "CubicPHSplineOpen"]
 
 
 def _validate_scalar(name: str, value: object) -> float:
@@ -55,9 +63,9 @@ def _validate_scalar(name: str, value: object) -> float:
 
 
 class CubicPHSpline(PHSpline):
-    """Open planar cubic-PH spline for convex and general point data.
+    """Abstract family base for planar cubic-PH splines.
 
-    ``CubicPHSpline(p)`` uses one segment per input span and one additional
+    :class:`CubicPHSplineOpen` uses one segment per input span and one additional
     segment at every section-22 auxiliary inflection point.  Geometry is G2
     inside every convex sub-spline and G1 at auxiliary and straight/curved
     joints.  Construction either succeeds with every postcondition verified
@@ -89,9 +97,9 @@ class CubicPHSpline(PHSpline):
         "_total_length",
     )
 
-    def __init__(self, p: PointSequence) -> None:
+    def __init__(self, points: PointSequence) -> None:
         object.__setattr__(self, "_frozen", False)
-        points = validate_points(p)
+        points = validate_points(points)
         input_geometry = analyze_geometry(points)
         plan = plan_spline(input_geometry)
         m = points.shape[0] - 1
@@ -252,7 +260,7 @@ class CubicPHSpline(PHSpline):
             else "general"
         )
         return (
-            f"{type(self).__name__}({self._m + 1} points, {self._n_segments} "
+            f"{type(self).__name__}({self.num_points} points, {self._n_segments} "
             f"segments, {kind})"
         )
 
@@ -309,6 +317,37 @@ class CubicPHSpline(PHSpline):
                         "G2 curvature residual exceeds the acceptance tolerance",
                         quantity="max|F_i|",
                         value=f_max,
+                        bound=f"<= {F_TOL:.1e}",
+                    )
+                return segments
+            except SplineConvergenceError as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
+    @staticmethod
+    def _solve_closed_and_accept(geometry) -> list[PHSegment]:
+        """Solve and strictly accept the cyclic convex G2 system."""
+        starts = (
+            initial_closed_fractions(geometry),
+            chord_weighted_closed_fractions(geometry),
+        )
+        last_error: SplineConvergenceError | None = None
+        for x0 in starts:
+            try:
+                x = solve_closed_tangents(geometry.lhat, geometry.phi, x0)
+                if not (np.all(x > 0.0) and np.all(x < 1.0)):
+                    raise SplineConvergenceError(
+                        "A cyclic tangent direction left its admissible wedge",
+                        quantity="x",
+                    )
+                segments, residuals = build_closed_curved_segments(geometry, x)
+                residual = float(np.max(np.abs(residuals)))
+                if not residual <= F_TOL:
+                    raise SplineConvergenceError(
+                        "Cyclic G2 curvature residual exceeds acceptance tolerance",
+                        quantity="max|F_i|",
+                        value=residual,
                         bound=f"<= {F_TOL:.1e}",
                     )
                 return segments
@@ -450,6 +489,99 @@ class CubicPHSpline(PHSpline):
                             bound=f"<= {EPS_TANGENT:.1e}",
                         )
 
+    @staticmethod
+    def _verify_closed_continuity(
+        segments: list[PHSegment],
+        joint_kinds: list[str] | None = None,
+        joint_tangents: list[tuple[float, float] | None] | None = None,
+    ) -> None:
+        """Independently verify the declared continuity at every cyclic join."""
+        if joint_kinds is None:
+            joint_kinds = ["g2"] * len(segments)
+        if joint_tangents is None:
+            joint_tangents = [None] * len(segments)
+        if not (
+            len(joint_kinds) == len(segments)
+            and len(joint_tangents) == len(segments)
+        ):
+            raise NumericalPrecisionError(
+                "Closed join metadata has inconsistent dimensions",
+                quantity="closed join metadata sizes",
+            )
+        for joint, right in enumerate(segments):
+            left = segments[joint - 1]
+            tangent_left = left.tangent_local(1.0)
+            tangent_right = right.tangent_local(0.0)
+            tangent_gap = math.hypot(
+                tangent_left[0] - tangent_right[0],
+                tangent_left[1] - tangent_right[1],
+            )
+            if not tangent_gap <= EPS_TANGENT:
+                raise G2VerificationError(
+                    "Tangent mismatch at a closed cubic join",
+                    index=joint,
+                    quantity="|T-(1) - T+(0)|",
+                    value=tangent_gap,
+                    bound=f"<= {EPS_TANGENT:.1e}",
+                )
+            curvature_left = left.curvature_local(1.0)
+            curvature_right = right.curvature_local(0.0)
+            kind = joint_kinds[joint]
+            if kind == "g2":
+                denominator = max(abs(curvature_left), abs(curvature_right), EPS)
+                curvature_gap = abs(curvature_left - curvature_right) / denominator
+                if not curvature_gap <= EPS_KAPPA:
+                    raise G2VerificationError(
+                        "Curvature mismatch at a closed cubic G2 join",
+                        index=joint,
+                        quantity="|k-(1) - k+(0)| / max(|k-|, |k+|, eps)",
+                        value=curvature_gap,
+                        bound=f"<= {EPS_KAPPA:.1e}",
+                    )
+            elif kind == "inflection":
+                if not curvature_left * curvature_right < 0.0:
+                    raise G2VerificationError(
+                        "Curvature does not change sign at a closed auxiliary join",
+                        index=joint,
+                        quantity="k-(1) * k+(0)",
+                        value=curvature_left * curvature_right,
+                        bound="< 0",
+                    )
+            elif kind == "transition":
+                if not ((left.chi == 0.0) ^ (right.chi == 0.0)):
+                    raise G2VerificationError(
+                        "Closed transition does not have one zero-curvature side",
+                        index=joint,
+                        quantity="zero-curvature sides",
+                        value=(left.chi == 0.0, right.chi == 0.0),
+                        bound="exactly one",
+                    )
+            else:
+                raise NumericalPrecisionError(
+                    "Closed join has an unknown continuity classification",
+                    index=joint,
+                    quantity="joint kind",
+                    value=kind,
+                )
+            prescribed = joint_tangents[joint]
+            if prescribed is not None:
+                for label, tangent in (
+                    ("left", tangent_left),
+                    ("right", tangent_right),
+                ):
+                    gap = math.hypot(
+                        tangent[0] - prescribed[0], tangent[1] - prescribed[1]
+                    )
+                    if not gap <= EPS_TANGENT:
+                        raise G2VerificationError(
+                            f"{label.capitalize()} tangent misses the closed "
+                            "prescribed G1 direction",
+                            index=joint,
+                            quantity="|T - d'|",
+                            value=gap,
+                            bound=f"<= {EPS_TANGENT:.1e}",
+                        )
+
     # ------------------------------------------------------------------
     # Parameter dispatch
     # ------------------------------------------------------------------
@@ -568,11 +700,7 @@ class CubicPHSpline(PHSpline):
 
     @property
     def num_points(self) -> int:
-        return self._m + 1
-
-    @property
-    def closed(self) -> bool:
-        return False
+        return int(self._points.shape[0])
 
     @property
     def length(self) -> float:
@@ -692,3 +820,272 @@ class CubicPHSpline(PHSpline):
         t = seg.invert_arc_length_local(s_local)
         x, y = seg.point_local(t)
         return self._denormalize_point(x, y)
+
+
+class CubicPHSplineOpen(CubicPHSpline):
+    """Immutable open cubic-PH interpolant for admissible planar points."""
+
+    __slots__ = ()
+
+    @property
+    def closed(self) -> bool:
+        return False
+
+
+class CubicPHSplineClosed(CubicPHSpline):
+    """Immutable closed cubic-PH interpolant for admissible cyclic points.
+
+    Strictly convex cycles use the square cyclic G2 solve.  General cycles
+    reuse the open family's deterministic auxiliary-inflection machinery;
+    they are G2 within each same-sign run and G1 only at genuine sign changes
+    and straight/curved transitions.
+    """
+
+    __slots__ = ()
+
+    def __init__(self, points: PointSequence) -> None:
+        object.__setattr__(self, "_frozen", False)
+        points = validate_points(points)
+        try:
+            geometry = analyze_closed_geometry(points)
+        except InterpolationDomainError as error:
+            if error.quantity not in (
+                "absolute normalized turn cross product",
+                "cyclic turn sign",
+            ):
+                raise
+            self._initialize_general_closed(points)
+            return
+        segments = self._solve_closed_and_accept(geometry)
+        n = len(segments)
+        taus = [geometry.tau] * n
+
+        self._verify_regularity(segments)
+        self._verify_admissibility(segments, taus)
+        self._verify_closed_continuity(segments)
+
+        prefix = compensated_prefix_sums([segment.length for segment in segments])
+        for i in range(n):
+            if not prefix[i + 1] > prefix[i]:
+                raise LengthResolutionError(
+                    "Closed prefix arc length failed to increase in binary64",
+                    index=i,
+                    quantity="C[i+1] - C[i]",
+                    value=prefix[i + 1] - prefix[i],
+                    bound="> 0",
+                )
+
+        user_points = np.array(points, dtype=np.float64, copy=True)
+        user_points.setflags(write=False)
+        segment_points = np.vstack((points, points[:1])).astype(
+            np.float64, copy=False
+        )
+        segment_points.setflags(write=False)
+        knots = np.arange(n + 1, dtype=np.float64) / n
+        knots.setflags(write=False)
+        prefix_normalized = np.asarray(prefix, dtype=np.float64)
+        prefix_normalized.setflags(write=False)
+        prefix_user = geometry.scale * prefix_normalized
+        if not np.all(np.isfinite(prefix_user)):
+            raise NumericalPrecisionError(
+                "Closed total arc length overflowed in user coordinates",
+                quantity="H * C[i]",
+            )
+        prefix_user.setflags(write=False)
+
+        object.__setattr__(self, "_points", user_points)
+        object.__setattr__(self, "_segment_points", segment_points)
+        object.__setattr__(self, "_origin", geometry.origin)
+        object.__setattr__(self, "_scale", geometry.scale)
+        object.__setattr__(self, "_m", n)
+        object.__setattr__(self, "_n_segments", n)
+        object.__setattr__(self, "_knots", knots)
+        object.__setattr__(self, "_segments", tuple(segments))
+        object.__setattr__(self, "_segment_taus", tuple(taus))
+        object.__setattr__(self, "_joint_kinds", tuple("g2" for _ in range(n)))
+        object.__setattr__(self, "_joint_tangents", tuple(None for _ in range(n)))
+        object.__setattr__(self, "_inflections", ())
+        object.__setattr__(self, "_prefix", prefix_normalized)
+        object.__setattr__(self, "_prefix_user", prefix_user)
+        object.__setattr__(self, "_total_length", float(prefix_user[-1]))
+        object.__setattr__(self, "_tau", geometry.tau)
+        object.__setattr__(self, "_is_straight", False)
+        object.__setattr__(self, "_boundary_clamped", (False, False))
+        object.__setattr__(self, "_frozen", True)
+
+    def _initialize_general_closed(self, points: np.ndarray) -> None:
+        """Compile one central period of a five-period open construction.
+
+        Repetition is a construction device, not approximation: every central
+        convex block is bounded by the same deterministic auxiliary joints as
+        it is in the infinite cyclic extension.  Cropping the central period
+        removes both open free boundaries and preserves the existing
+        subsegment-inflection implementation unchanged.  Two guard periods
+        on each side also permit an independent adjacent-period check.
+        """
+        n_points = points.shape[0]
+        if n_points < 3:
+            raise InsufficientPointDataError(
+                "At least three distinct points are required for a closed spline",
+                quantity="len(points)",
+                value=n_points,
+                bound=">= 3",
+            )
+        if np.array_equal(points[0], points[-1]):
+            raise DegeneratePointDataError(
+                "Closed input lists the seam point twice; provide it once",
+                index=(0, n_points - 1),
+                quantity="seam point",
+            )
+        cycle = points.tolist()
+        extended = cycle * 5 + [cycle[0]]
+        periodic = CubicPHSplineOpen(extended)
+        lower = 2.0 / 5.0
+        upper = 3.0 / 5.0
+        next_upper = 4.0 / 5.0
+        start = int(np.argmin(np.abs(periodic._knots - lower)))
+        end = int(np.argmin(np.abs(periodic._knots - upper)))
+        knot_tolerance = 32.0 * EPS
+        if not (
+            abs(float(periodic._knots[start]) - lower) <= knot_tolerance
+            and abs(float(periodic._knots[end]) - upper) <= knot_tolerance
+            and end > start
+        ):
+            raise NumericalPrecisionError(
+                "Could not isolate the central period of cyclic construction",
+                quantity="central-period knot locations",
+            )
+
+        source_segments = periodic._segments[start:end]
+        segments = [
+            PHSegment(
+                index=index,
+                w0=source.w0,
+                w1=source.w1,
+                chi_stable=source.chi,
+                ctrl=source.ctrl,
+            )
+            for index, source in enumerate(source_segments)
+        ]
+        segment_count = len(segments)
+        taus = list(periodic._segment_taus[start:end])
+        joint_kinds = [periodic._joint_kinds[end - 1]] + list(
+            periodic._joint_kinds[start : end - 1]
+        )
+        joint_tangents = [periodic._joint_tangents[end - 1]] + list(
+            periodic._joint_tangents[start : end - 1]
+        )
+        if joint_kinds[0] != "g2":
+            raise InterpolationDomainError(
+                "The selected closed seam is not inside a G2-compatible run",
+                index=0,
+                quantity="seam continuity",
+                value=joint_kinds[0],
+                bound="g2",
+            )
+
+        self._verify_regularity(segments)
+        self._verify_admissibility(segments, taus)
+        self._verify_closed_continuity(segments, joint_kinds, joint_tangents)
+
+        # The following period must reproduce the same geometric spans.  This
+        # is an independent check that three-period cropping was sufficient.
+        next_end = int(np.argmin(np.abs(periodic._knots - next_upper)))
+        next_period = periodic._segments[end:next_end]
+        if len(next_period) != segment_count:
+            raise NumericalPrecisionError(
+                "Repeated cyclic construction produced inconsistent span counts",
+                quantity="period span counts",
+                value=(segment_count, len(next_period)),
+                bound="equal",
+            )
+        for index, (left, right) in enumerate(zip(segments, next_period)):
+            if not np.allclose(left.ctrl, right.ctrl, rtol=2e-12, atol=2e-12):
+                raise NumericalPrecisionError(
+                    "Repeated cyclic construction was not geometrically periodic",
+                    index=index,
+                    quantity="Bezier control-net repeat residual",
+                )
+
+        prefix = compensated_prefix_sums([segment.length for segment in segments])
+        for i in range(segment_count):
+            if not prefix[i + 1] > prefix[i]:
+                raise LengthResolutionError(
+                    "Closed prefix arc length failed to increase in binary64",
+                    index=i,
+                    quantity="C[i+1] - C[i]",
+                    value=prefix[i + 1] - prefix[i],
+                    bound="> 0",
+                )
+        segment_points = np.array(
+            periodic._segment_points[start : end + 1], dtype=np.float64, copy=True
+        )
+        segment_points.setflags(write=False)
+        knots = np.array(
+            (periodic._knots[start : end + 1] - lower) / (upper - lower),
+            dtype=np.float64,
+        )
+        knots[0], knots[-1] = 0.0, 1.0
+        for point_index in range(1, n_points):
+            target = point_index / n_points
+            knot_index = int(np.argmin(np.abs(knots - target)))
+            if abs(float(knots[knot_index]) - target) > 64.0 * EPS:
+                raise NumericalPrecisionError(
+                    "Cropped construction lost an authoritative user knot",
+                    index=point_index,
+                    quantity="nearest user-knot residual",
+                    value=abs(float(knots[knot_index]) - target),
+                    bound=f"<= {64.0 * EPS:.3e}",
+                )
+            knots[knot_index] = target
+        if not np.all(np.diff(knots) > 0.0):
+            raise NumericalPrecisionError(
+                "Cropped closed knots are not strictly increasing",
+                quantity="diff(knots)",
+                bound="> 0",
+            )
+        knots.setflags(write=False)
+
+        inflections = tuple(
+            replace(info, span_index=info.span_index - 2 * n_points)
+            for info in periodic._inflections
+            if 2 * n_points <= info.span_index < 3 * n_points
+        )
+        user_points = np.array(points, dtype=np.float64, copy=True)
+        user_points.setflags(write=False)
+        prefix_normalized = np.asarray(prefix, dtype=np.float64)
+        prefix_normalized.setflags(write=False)
+        prefix_user = periodic._scale * prefix_normalized
+        if not np.all(np.isfinite(prefix_user)):
+            raise NumericalPrecisionError(
+                "Closed total arc length overflowed in user coordinates",
+                quantity="H * C[i]",
+            )
+        prefix_user.setflags(write=False)
+
+        object.__setattr__(self, "_points", user_points)
+        object.__setattr__(self, "_segment_points", segment_points)
+        object.__setattr__(self, "_origin", periodic._origin)
+        object.__setattr__(self, "_scale", periodic._scale)
+        object.__setattr__(self, "_m", n_points)
+        object.__setattr__(self, "_n_segments", segment_count)
+        object.__setattr__(self, "_knots", knots)
+        object.__setattr__(self, "_segments", tuple(segments))
+        object.__setattr__(self, "_segment_taus", tuple(taus))
+        object.__setattr__(self, "_joint_kinds", tuple(joint_kinds))
+        object.__setattr__(self, "_joint_tangents", tuple(joint_tangents))
+        object.__setattr__(self, "_inflections", inflections)
+        object.__setattr__(self, "_prefix", prefix_normalized)
+        object.__setattr__(self, "_prefix_user", prefix_user)
+        object.__setattr__(self, "_total_length", float(prefix_user[-1]))
+        unique_taus = set(taus)
+        object.__setattr__(
+            self, "_tau", next(iter(unique_taus)) if len(unique_taus) == 1 else 0
+        )
+        object.__setattr__(self, "_is_straight", unique_taus == {0})
+        object.__setattr__(self, "_boundary_clamped", (False, False))
+        object.__setattr__(self, "_frozen", True)
+
+    @property
+    def closed(self) -> bool:
+        return True

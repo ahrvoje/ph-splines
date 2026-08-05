@@ -1,5 +1,5 @@
 ---
-title: "PHBSpline: Technical Implementation Specification"
+title: "PH B-spline family: Technical Implementation Specification"
 subtitle: "Dynamic planar Pythagorean-hodograph B-splines with verified distance-domain access"
 author: "Prepared from the cubic-ph-spline 1.1.0 reference implementation"
 date: "2026-08-05"
@@ -29,14 +29,14 @@ header-includes:
 
 **Status:** as-built implementation specification, revision 0.4.
 
-**Target:** the repository `PHBSpline` reference implementation, generalized
+**Target:** the repository PH B-spline family reference implementation, generalized
 from immutable cubic PH segments to mutable, variable-order planar PH
 B-splines. This revision incorporates the minimum-degree basis correction and
 the periodic/antiperiodic closed-preimage seam correction.
 
 **Reviewed baseline:** repository `main` as retrieved on 2026-08-05; package metadata reports version 1.1.0. The retrieved test suite completed with **491 passed** under the review environment. The baseline package documents normalized construction, independently verified nonlinear solves, exact polynomial arc length, cancellation-resistant cubic inversion, and approximately 5-6 microseconds per scalar random `point_at_length` query for 100 through 10,000 segments on its reported benchmark platform.
 
-**Current verification:** the combined repository suite completed with **719
+**Current verification:** the combined repository suite completed with **737
 passed** after this reconstruction audit.
 
 This document is normative for reconstruction of the reference mathematical
@@ -50,7 +50,9 @@ The terms **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOU
 
 # Executive specification
 
-`PHBSpline` SHALL be a mutable planar point-interpolating spline with the following principal properties:
+`PHBSplineOpen` and `PHBSplineClosed` SHALL be mutable planar
+point-interpolating splines with the following principal properties.
+`PHBSpline` SHALL be their non-instantiable abstract family base:
 
 1. It accepts an ordered sequence of finite planar points in arbitrary geometric configuration: convex, nonconvex, inflectional, self-intersecting, looping, backtracking, or containing nonconsecutive repeated points. Consecutive coincident points are rejected by default because they do not define a nonzero interpolation span.
 2. It represents a piecewise polynomial Pythagorean-hodograph curve using a complex polynomial B-spline preimage. Its speed and cumulative arc length are piecewise polynomials constructed analytically, without numerical quadrature.
@@ -61,7 +63,7 @@ exterior span kernels are structurally shared. The reference implementation
 still performs whole-object validation, array assembly, and flat-prefix
 publication, so total edit latency is currently $O(N)$ even though the
 nonlinear solve and span recompilation are bounded.
-5. It provides an API adapted from `CubicPHSpline`: `point`, `tangent`, `normal`, `principal_normal`, `signed_curvature`, `curvature_vector`, `arc_length`, `parameter_at_length`, and `point_at_length`, plus arbitrary-order derivative-vector and curvature-vector queries, batch queries, and dynamic-edit APIs.
+5. They provide an API adapted from `CubicPHSplineOpen`: `point`, `tangent`, `normal`, `principal_normal`, `signed_curvature`, `curvature_vector`, `arc_length`, `parameter_at_length`, and `point_at_length`, plus arbitrary-order derivative-vector and curvature-vector queries, batch queries, and dynamic-edit APIs.
 6. Random distance access uses a compensated flat prefix array, binary search,
 a per-span parameter/length LUT, and bracketed Newton correction with bisection
 fallback. The result is accepted only after a forward or reverse arc-length
@@ -130,7 +132,9 @@ parameter_at_length(s) -> float
 point_at_length(s) -> np.ndarray
 ```
 
-The baseline `curvature_vector(u)` call SHALL remain source-compatible and mean order zero. `PHBSpline` SHALL additionally expose named arbitrary-order vector queries:
+The baseline `curvature_vector(u)` call SHALL remain source-compatible and mean
+order zero. Both concrete PH B-spline classes SHALL additionally expose named
+arbitrary-order vector queries:
 
 ```python
 derivative(u, order=1, *, wrt="parameter", side="auto") -> np.ndarray
@@ -159,9 +163,9 @@ The new package SHALL retain these principles from `cubic-ph-spline`:
 
 ## 2.3 Intentional differences
 
-`PHBSpline` differs from `CubicPHSpline` in the following mandatory ways:
+The PH B-spline family differs from `CubicPHSplineOpen` in the following mandatory ways:
 
-| Concern | `CubicPHSpline` baseline | `PHBSpline` requirement |
+| Concern | `CubicPHSplineOpen` baseline | PH B-spline requirement |
 |---|---|---|
 | Primitive degree | Cubic PH segments | Degree deduced from continuity request; default quintic PH |
 | Arc inverse | Elementary monotone cubic inverse | Cached monotone inverse plus safeguarded polynomial correction |
@@ -187,7 +191,11 @@ The implementation plan is based on a direct review of the repository source and
 | `exceptions.py` | Value/runtime dual inheritance and structured diagnostics | Preserve the pattern, expand fields for point IDs, span IDs, edit operation, and patch |
 | `tests/` | Arc inversion, extreme scale, frames, G2, nonconvex data, invariants, straight cases, and validation | Port all behavioral intents and add variable-order, dynamic-edit, flat-prefix, closed-monodromy, and scale tests |
 
-The existing `CubicPHSpline` class SHALL remain importable. The package top-level `ph_spline.__init__` SHALL export `PHSpline`, `CubicPHSpline`, and `PHBSpline`; adding the new class MUST NOT make either concrete implementation inherit from the other.
+The package top-level `ph_spline.__init__` SHALL export `PHSpline`, the
+abstract family bases `CubicPHSpline` and `PHBSpline`, and all four sibling
+topology classes `CubicPHSplineOpen`, `CubicPHSplineClosed`, `PHBSplineOpen`,
+and `PHBSplineClosed`. No open/closed pair and no cubic/B-spline pair may
+inherit from one another; concrete classes inherit only their own family base.
 
 # 3. Mathematical model
 
@@ -539,7 +547,9 @@ The constructor SHALL reject:
 - a chord whose physical displacement or length cannot be represented reliably under the numerical policy;
 - an input whose requested continuity order exceeds the configured resource limit.
 
-For a closed curve, an exactly duplicated final point equal to the first MAY be accepted and canonicalized by removing the duplicate. Tolerance-based point merging is forbidden.
+For a closed curve, an exactly duplicated final point equal to the first SHALL
+be rejected; each authoritative cyclic point is listed once. Tolerance-based
+point merging is forbidden.
 
 ## 5.3 Nonconsecutive duplicates
 
@@ -562,15 +572,28 @@ It SHALL NOT promise a simple curve. Optional policies MAY request `avoid_self_i
 
 ## 6.1 Constructor
 
-The required signature is:
+`PHBSpline` is abstract. The required concrete signatures are:
 
 ```python
-class PHBSpline:
+class PHBSplineOpen(PHBSpline):
     def __init__(
         self,
         points: ArrayLike,
         *,
-        closed: bool = False,
+        g_order: int | None = None,
+        c_order: int | None = None,
+        curvature_order: int | None = None,
+        construction: ConstructionPolicy | None = None,
+        editing: EditingPolicy | None = None,
+        inverse: InversePolicy | None = None,
+        numerics: NumericalPolicy | None = None,
+    ) -> None: ...
+
+class PHBSplineClosed(PHBSpline):
+    def __init__(
+        self,
+        points: ArrayLike,
+        *,
         g_order: int | None = None,
         c_order: int | None = None,
         curvature_order: int | None = None,
@@ -581,7 +604,9 @@ class PHBSpline:
     ) -> None: ...
 ```
 
-Policies SHALL be immutable dataclasses. `None` selects documented defaults.
+Topology SHALL be selected only by the concrete class name; a `closed`
+constructor Boolean is not part of either signature. Policies SHALL be
+immutable dataclasses. `None` selects documented defaults.
 
 ## 6.2 Required properties
 
@@ -689,7 +714,7 @@ $$
 C_j^{(s)}=D_s^{j+2}z.
 $$
 
-The no-keyword call `curvature_vector(u)` retains the `CubicPHSpline` order-zero result. `jet(..., order=r)` returns $(z,D_qz,\ldots,D_q^rz)$, and `curvature_vector_jet(..., order=j)` returns $(C_0,D_qC_0,\ldots,D_q^jC_0)$. A full jet SHALL share one recurrence and workspace; it MUST NOT invoke the single-order method repeatedly.
+The no-keyword call `curvature_vector(u)` retains the `CubicPHSplineOpen` order-zero result. `jet(..., order=r)` returns $(z,D_qz,\ldots,D_q^rz)$, and `curvature_vector_jet(..., order=j)` returns $(C_0,D_qC_0,\ldots,D_q^jC_0)$. A full jet SHALL share one recurrence and workspace; it MUST NOT invoke the single-order method repeatedly.
 
 `order` SHALL accept Python and NumPy integer scalars, reject booleans and nonintegral values, and be nonnegative. An order above the configured resource limit raises `ResourceLimitError`. A parameter derivative whose order exceeds the local curve degree is the exact zero vector. Arc-length derivatives and curvature-vector derivatives do not generally terminate with polynomial degree.
 
@@ -970,7 +995,7 @@ A query SHALL never invoke the nonlinear construction solver.
 ph_spline/
     __init__.py
     base.py                 # sibling PHSpline abstract base
-    bspline.py              # PHBSpline API, edits, snapshots, geometry queries
+    bspline.py              # PHBSpline family API, topologies, edits and queries
     bspline_types.py        # policies, handles, reports, diagnostics
     bspline_basis.py        # basis, twisted extraction, exact constraints, solve
     bspline_construction.py # validation, guide, build, local repair, verification
@@ -2138,7 +2163,7 @@ edits, but the reference mutable object does not yet claim a multi-writer or
 reader/writer locking contract. The following requirements apply when such a
 profile is implemented.
 
-The mutable `PHBSpline` SHALL support multiple concurrent readers and a single writer through a read/write lock or immutable-root publication.
+Each mutable concrete PH B-spline SHALL support multiple concurrent readers and a single writer through a read/write lock or immutable-root publication.
 
 - Queries observe one complete version.
 - An edit constructs a private candidate and publishes it atomically.
@@ -2401,7 +2426,7 @@ The recommended work breakdown is:
 - concurrency;
 - fuzzing and high-precision oracles;
 - 100,000-point benchmarks;
-- documentation and migration guide from `CubicPHSpline`.
+- documentation and migration guide from `CubicPHSplineOpen`.
 
 No phase should introduce a public unverified fallback merely to keep the API running.
 
@@ -2409,7 +2434,7 @@ No phase should introduce a public unverified fallback merely to keep the API ru
 
 ```python
 import numpy as np
-from ph_spline import PHBSpline
+from ph_spline import PHBSplineOpen
 
 points = np.array(
     [
@@ -2423,7 +2448,7 @@ points = np.array(
 )
 
 # With no explicit continuity arguments, the guarantee defaults to G2.
-curve = PHBSpline(points)
+curve = PHBSplineOpen(points)
 
 L = curve.length
 p = curve.point_at_length(0.37 * L)
@@ -2449,7 +2474,7 @@ loc2 = curve.advance_by_length(loc, 1.0e-6)
 p2 = curve.point_after_length(loc, 1.0e-6)
 
 # Higher-order request. Degree is deduced, not fixed in the class.
-curve_c4 = PHBSpline(points, c_order=4, curvature_order=2)
+curve_c4 = PHBSplineOpen(points, c_order=4, curvature_order=2)
 assert curve_c4.preimage_degree == 4
 assert curve_c4.degree == 2 * curve_c4.preimage_degree + 1
 

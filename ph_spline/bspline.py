@@ -1,4 +1,4 @@
-"""Mutable public :class:`PHBSpline` API and verified query dispatch."""
+"""PH B-spline family API and verified query dispatch."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ def _edit_point(value: object) -> NDArray[np.float64]:
 
 
 class PHBSpline(PHSpline):
-    """Mutable planar point-interpolating polynomial PH B-spline.
+    """Abstract family base for mutable point-interpolating PH B-splines.
 
     The class constructs an immutable compiled PH span set before publishing
     any state.  Every edit builds and verifies a replacement first, then
@@ -142,7 +142,7 @@ class PHBSpline(PHSpline):
         self,
         points: ArrayLike,
         *,
-        closed: bool = False,
+        _closed: bool,
         g_order: int | None = None,
         c_order: int | None = None,
         curvature_order: int | None = None,
@@ -151,8 +151,6 @@ class PHBSpline(PHSpline):
         inverse: InversePolicy | None = None,
         numerics: NumericalPolicy | None = None,
     ) -> None:
-        if not isinstance(closed, (bool, np.bool_)):
-            raise TypeError("closed must be a Boolean")
         self._construction = construction or ConstructionPolicy()
         self._editing = editing or EditingPolicy()
         self._inverse = inverse or InversePolicy()
@@ -166,7 +164,7 @@ class PHBSpline(PHSpline):
             if not isinstance(policy, kind):
                 raise TypeError(f"{name} must be {kind.__name__} or None")
         self._validate_policies()
-        self._closed = bool(closed)
+        self._closed = _closed
         self._g_order = g_order
         self._c_order = c_order
         self._curvature_order = curvature_order
@@ -369,7 +367,7 @@ class PHBSpline(PHSpline):
 
     def __repr__(self) -> str:
         return (
-            f"PHBSpline({self.num_points} points, {self.num_spans} spans, "
+            f"{type(self).__name__}({self.num_points} points, {self.num_spans} spans, "
             f"degree={self.degree}, {'closed' if self.closed else 'open'}, "
             f"version={self.version})"
         )
@@ -409,10 +407,6 @@ class PHBSpline(PHSpline):
     @property
     def verified_continuity(self) -> ContinuitySpec:
         return self._state.verified_continuity
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
 
     @property
     def length(self) -> float:
@@ -1444,6 +1438,70 @@ class PHBSpline(PHSpline):
         return PHBSplineSnapshot(self)
 
 
+class PHBSplineOpen(PHBSpline):
+    """Mutable open point-interpolating polynomial PH B-spline."""
+
+    def __init__(
+        self,
+        points: ArrayLike,
+        *,
+        g_order: int | None = None,
+        c_order: int | None = None,
+        curvature_order: int | None = None,
+        construction: ConstructionPolicy | None = None,
+        editing: EditingPolicy | None = None,
+        inverse: InversePolicy | None = None,
+        numerics: NumericalPolicy | None = None,
+    ) -> None:
+        super().__init__(
+            points,
+            _closed=False,
+            g_order=g_order,
+            c_order=c_order,
+            curvature_order=curvature_order,
+            construction=construction,
+            editing=editing,
+            inverse=inverse,
+            numerics=numerics,
+        )
+
+    @property
+    def closed(self) -> bool:
+        return False
+
+
+class PHBSplineClosed(PHBSpline):
+    """Mutable closed point-interpolating polynomial PH B-spline."""
+
+    def __init__(
+        self,
+        points: ArrayLike,
+        *,
+        g_order: int | None = None,
+        c_order: int | None = None,
+        curvature_order: int | None = None,
+        construction: ConstructionPolicy | None = None,
+        editing: EditingPolicy | None = None,
+        inverse: InversePolicy | None = None,
+        numerics: NumericalPolicy | None = None,
+    ) -> None:
+        super().__init__(
+            points,
+            _closed=True,
+            g_order=g_order,
+            c_order=c_order,
+            curvature_order=curvature_order,
+            construction=construction,
+            editing=editing,
+            inverse=inverse,
+            numerics=numerics,
+        )
+
+    @property
+    def closed(self) -> bool:
+        return True
+
+
 class PHBSplineEditTransaction(AbstractContextManager["PHBSplineEditTransaction"]):
     """Draft multiple point edits and publish them with one verified rebuild."""
 
@@ -1578,7 +1636,7 @@ class PHBSplineSnapshot:
     }
 
     def __init__(self, source: PHBSpline) -> None:
-        frozen = object.__new__(PHBSpline)
+        frozen = object.__new__(type(source))
         frozen.__dict__ = dict(source.__dict__)
         self._curve = frozen
 
@@ -1588,4 +1646,10 @@ class PHBSplineSnapshot:
         return getattr(self._curve, name)
 
 
-__all__ = ["PHBSpline", "PHBSplineEditTransaction", "PHBSplineSnapshot"]
+__all__ = [
+    "PHBSpline",
+    "PHBSplineClosed",
+    "PHBSplineEditTransaction",
+    "PHBSplineOpen",
+    "PHBSplineSnapshot",
+]

@@ -1,6 +1,6 @@
 """Gallery support for the main class's direct general-data construction.
 
-Every example is built by one ``CubicPHSpline``.  Alternate shades expose
+Every example is built by one ``CubicPHSplineOpen``.  Alternate shades expose
 the class's internally verified convex sub-splines; they are not separate
 curves and their boundaries are the section-22 G1 joints, never G0 cuts.
 
@@ -28,7 +28,7 @@ from _common import (
     _display_transform,
 )
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 #: Categorical slot 8 (red) from the validated reference palette.
 SERIES_RED = "#e34948"
@@ -39,7 +39,7 @@ SERIES_SPLINE_ALT = "#6da7ec"
 
 
 class GalleryCurve:
-    """Thin plotting adapter around one general-data ``CubicPHSpline``."""
+    """Thin plotting adapter around one general-data ``CubicPHSplineOpen``."""
 
     def __init__(self, points) -> None:
         arr = np.asarray(points, dtype=np.float64)
@@ -47,7 +47,7 @@ class GalleryCurve:
             raise ValueError("example input must be an (n, 2) point array")
         self.points = arr
         data = [[float(x), float(y)] for x, y in arr]
-        self.curve = CubicPHSpline(data)
+        self.curve = CubicPHSplineOpen(data)
         self.total_length = self.curve.arc_length(1.0)
         self.n_segments = len(self.curve._segments)
         starts = [0]

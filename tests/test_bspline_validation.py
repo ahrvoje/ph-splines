@@ -1,4 +1,4 @@
-"""PHBSpline input, policy, resource, and scalar validation."""
+"""PHBSplineOpen input, policy, resource, and scalar validation."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from ph_spline import (
     NonFiniteCoordinateError,
     NumericalPolicy,
     ParameterOutOfRangeError,
-    PHBSpline,
+    PHBSplineClosed,
+    PHBSplineOpen,
     PHBSplineError,
     ResourceLimitError,
 )
@@ -37,14 +38,14 @@ POINTS = [[0.0, 0.0], [1.0, 0.4], [2.0, -0.7], [3.0, 1.1]]
     ],
 )
 def test_general_array_like_points_are_accepted(container):
-    curve = PHBSpline(container)
+    curve = PHBSplineOpen(container)
     assert curve.num_points == 4
 
 
 @pytest.mark.parametrize("bad", [None, 3, "points", {"x": 1}, [], [[0.0, 0.0]]])
 def test_malformed_or_insufficient_outer_data_rejected(bad):
     with pytest.raises((InvalidPointDataError, InsufficientPointDataError)):
-        PHBSpline(bad)
+        PHBSplineOpen(bad)
 
 
 @pytest.mark.parametrize(
@@ -59,41 +60,41 @@ def test_malformed_or_insufficient_outer_data_rejected(bad):
 )
 def test_bad_point_elements_rejected(bad):
     with pytest.raises(InvalidPointDataError):
-        PHBSpline(bad)
+        PHBSplineOpen(bad)
 
 
 @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
 def test_nonfinite_coordinates_rejected(bad):
     with pytest.raises(NonFiniteCoordinateError):
-        PHBSpline([[0.0, 0.0], [1.0, bad]])
+        PHBSplineOpen([[0.0, 0.0], [1.0, bad]])
 
 
 def test_consecutive_duplicates_rejected_but_nonconsecutive_allowed():
     with pytest.raises(DegeneratePointDataError):
-        PHBSpline([[0.0, 0.0], [0.0, 0.0], [1.0, 0.0]])
-    curve = PHBSpline([[0.0, 0.0], [1.0, 0.5], [0.0, 0.0], [-1.0, 0.5]])
+        PHBSplineOpen([[0.0, 0.0], [0.0, 0.0], [1.0, 0.0]])
+    curve = PHBSplineOpen([[0.0, 0.0], [1.0, 0.5], [0.0, 0.0], [-1.0, 0.5]])
     assert np.array_equal(curve.point(curve._knots[2]), [0.0, 0.0])
 
 
 def test_closed_input_contract():
     with pytest.raises(InsufficientPointDataError):
-        PHBSpline([[0.0, 0.0], [1.0, 0.0]], closed=True)
+        PHBSplineClosed([[0.0, 0.0], [1.0, 0.0]])
     with pytest.raises(DegeneratePointDataError):
-        PHBSpline([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 0.0]], closed=True)
+        PHBSplineClosed([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
     with pytest.raises(TypeError):
-        PHBSpline(POINTS, closed=1)
+        PHBSplineOpen(POINTS, closed=1)
 
 
 @pytest.mark.parametrize("name", ["g_order", "c_order", "curvature_order"])
 @pytest.mark.parametrize("bad", [True, -1, 1.5, "2", np.array(2)])
 def test_continuity_order_validation(name, bad):
     with pytest.raises((ContinuitySpecificationError, TypeError)):
-        PHBSpline(POINTS, **{name: bad})
+        PHBSplineOpen(POINTS, **{name: bad})
 
 
 def test_degree_resource_limit_checked_before_construction():
     with pytest.raises(ResourceLimitError):
-        PHBSpline(POINTS, g_order=17, numerics=NumericalPolicy(max_preimage_degree=16))
+        PHBSplineOpen(POINTS, g_order=17, numerics=NumericalPolicy(max_preimage_degree=16))
 
 
 @pytest.mark.parametrize(
@@ -106,12 +107,12 @@ def test_degree_resource_limit_checked_before_construction():
 )
 def test_invalid_numerical_policy_rejected(policy):
     with pytest.raises(ValueError):
-        PHBSpline(POINTS, numerics=policy)
+        PHBSplineOpen(POINTS, numerics=policy)
 
 
 def test_invalid_inverse_policy_rejected():
     with pytest.raises(ValueError):
-        PHBSpline(POINTS, inverse=InversePolicy(lut_nodes_min=16, lut_nodes_max=8))
+        PHBSplineOpen(POINTS, inverse=InversePolicy(lut_nodes_min=16, lut_nodes_max=8))
 
 
 @pytest.mark.parametrize(
@@ -130,12 +131,12 @@ def test_invalid_inverse_policy_rejected():
 )
 def test_every_policy_family_rejects_ill_defined_fields(keyword, policy):
     with pytest.raises(ValueError):
-        PHBSpline(POINTS, **{keyword: policy})
+        PHBSplineOpen(POINTS, **{keyword: policy})
 
 
 @pytest.fixture(scope="module")
 def curve():
-    return PHBSpline(POINTS)
+    return PHBSplineOpen(POINTS)
 
 
 @pytest.mark.parametrize(

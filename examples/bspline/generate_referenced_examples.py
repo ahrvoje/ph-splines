@@ -1,4 +1,4 @@
-"""Render PHBSpline versions of every referenced input-gallery case.
+"""Render PHBSplineOpen versions of every referenced input-gallery case.
 
 Run from the repository root:
     python examples/bspline/generate_referenced_examples.py
@@ -21,7 +21,7 @@ import generate_nonconvex_pathological
 import generate_nonconvex_shapes
 
 from examples.bspline._common import render_curve
-from ph_spline import PHBSpline
+from ph_spline import PHBSplineClosed, PHBSplineOpen
 
 OUT = Path(__file__).resolve().parent
 
@@ -53,9 +53,9 @@ def main() -> None:
         for index, (name, points, note) in enumerate(cases, 1):
             try:
                 is_radial_star = name == "star_zigzag_radial"
-                curve = PHBSpline(
+                spline_type = PHBSplineClosed if is_radial_star else PHBSplineOpen
+                curve = spline_type(
                     closed_radial_star() if is_radial_star else points,
-                    closed=is_radial_star,
                     g_order=8 if is_radial_star else 2,
                 )
                 render_curve(

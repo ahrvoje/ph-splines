@@ -7,7 +7,7 @@ from itertools import pairwise
 
 import numpy as np
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 EPS = np.finfo(float).eps
 
@@ -22,7 +22,7 @@ def segment_residual_bound(length: float, s: float) -> float:
 
 
 def test_segment_inversion_exhaustive(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     rng = np.random.default_rng(20260804)
     for seg in curve._segments:
         L = seg.length
@@ -52,7 +52,7 @@ def test_segment_inversion_exhaustive(any_case):
 
 
 def test_segment_round_trip_t_to_s_to_t(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     for seg in curve._segments:
         for t in np.linspace(0.0, 1.0, 23):
             t = float(t)
@@ -66,7 +66,7 @@ def test_segment_round_trip_t_to_s_to_t(any_case):
 
 def test_inversion_from_both_traversal_directions(any_case):
     """Targets near both segment ends resolve with full relative accuracy."""
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     for seg in curve._segments:
         L = seg.length
         for frac in (1e-15, 1e-12, 1e-9, 1e-3):
@@ -88,7 +88,7 @@ def test_inversion_from_both_traversal_directions(any_case):
 
 
 def test_arc_length_endpoints(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     assert curve.arc_length(0.0) == 0.0
     L = curve.arc_length(1.0)
     assert L > 0.0
@@ -99,14 +99,14 @@ def test_arc_length_endpoints(any_case):
 
 
 def test_arc_length_monotone(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     us = np.linspace(0.0, 1.0, 257)
     values = [curve.arc_length(float(u)) for u in us]
     assert all(b > a for a, b in pairwise(values))
 
 
 def test_parameter_at_length_monotone(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     L = curve.arc_length(1.0)
     ss = np.linspace(0.0, L, 257)
     values = [curve.parameter_at_length(float(s)) for s in ss]
@@ -114,7 +114,7 @@ def test_parameter_at_length_monotone(any_case):
 
 
 def test_round_trip_s_u_s(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     L = curve.arc_length(1.0)
     rng = np.random.default_rng(7)
     targets = np.concatenate([np.linspace(0.0, L, 41), L * rng.random(64)])
@@ -128,7 +128,7 @@ def test_round_trip_s_u_s(any_case):
 
 
 def test_prefix_lengths_map_to_exact_knots(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     m = curve._m
     for j in range(m + 1):
         s_j = curve.arc_length(j / m)
@@ -138,7 +138,7 @@ def test_prefix_lengths_map_to_exact_knots(any_case):
 
 
 def test_point_at_length_matches_composition(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     L = curve.arc_length(1.0)
     for f in np.linspace(0.001, 0.999, 37):
         s = float(f) * L
@@ -149,7 +149,7 @@ def test_point_at_length_matches_composition(any_case):
 
 def test_point_at_length_is_c2_arclength_derivative(curved_case):
     """dr/ds == T within second-order finite-difference error."""
-    curve = CubicPHSpline(curved_case)
+    curve = CubicPHSplineOpen(curved_case)
     L = curve.arc_length(1.0)
     h = 1e-6 * L
     for f in (0.21, 0.4999, 0.5001, 0.83):
@@ -166,7 +166,7 @@ def test_point_at_length_is_c2_arclength_derivative(curved_case):
 
 def test_arc_length_upper_bound_of_displacement(any_case):
     """||z(u2) - z(u1)|| <= arc length between them."""
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     us = np.linspace(0.0, 1.0, 33)
     for u1, u2 in pairwise(us):
         chord = float(np.hypot(*(curve.point(float(u2)) - curve.point(float(u1)))))

@@ -11,7 +11,8 @@ from ph_spline import (
     InvalidPointDataError,
     LocalEditFailure,
     NonFiniteCoordinateError,
-    PHBSpline,
+    PHBSplineClosed,
+    PHBSplineOpen,
     StaleHandleError,
     StaleLocationError,
 )
@@ -20,7 +21,7 @@ POINTS = np.array([[0.0, 0.0], [1.0, 0.4], [2.0, -0.7], [3.0, 1.1], [2.2, 2.0]])
 
 
 def test_move_preserves_handle_and_interpolates_new_position():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     handle = curve.point_handle(2)
     report = curve.move_point(handle, [2.1, -0.9], repair="global")
     assert curve.index_of(handle) == 2
@@ -31,7 +32,7 @@ def test_move_preserves_handle_and_interpolates_new_position():
 @pytest.mark.parametrize("order", [2, 4, 8])
 def test_default_move_is_local_and_structurally_shares_exterior_spans(order):
     x = np.linspace(0.0, 20.0, 101)
-    curve = PHBSpline(np.column_stack((x, 0.2 * np.sin(x))), g_order=order)
+    curve = PHBSplineOpen(np.column_stack((x, 0.2 * np.sin(x))), g_order=order)
     old_spans = curve._spans
     report = curve.move_point(50, [10.0, -0.08])
     assert report.rebuilt_span_count == 2 * (order + 3)
@@ -45,7 +46,7 @@ def test_default_move_is_local_and_structurally_shares_exterior_spans(order):
 
 def test_default_insert_and_delete_are_local_and_keep_existing_handles():
     x = np.linspace(0.0, 20.0, 101)
-    curve = PHBSpline(np.column_stack((x, 0.2 * np.sin(x))))
+    curve = PHBSplineOpen(np.column_stack((x, 0.2 * np.sin(x))))
     retained = curve.point_handle(70)
     inserted = curve.insert_point(50, [9.9, -0.05])
     assert inserted.report.rebuilt_span_count == 10
@@ -59,7 +60,7 @@ def test_default_insert_and_delete_are_local_and_keep_existing_handles():
 def test_closed_seam_edits_use_a_wrapped_local_patch(order):
     angles = np.linspace(0.0, 2.0 * np.pi, 32, endpoint=False)
     points = np.column_stack((np.cos(angles), np.sin(angles)))
-    curve = PHBSpline(points, closed=True, g_order=order)
+    curve = PHBSplineClosed(points, g_order=order)
     report = curve.move_point(0, [1.02, 0.01])
     assert report.rebuilt_span_count == 2 * (order + 3)
     assert np.array_equal(curve.point(0.0), curve.point(1.0))
@@ -69,7 +70,7 @@ def test_closed_seam_edits_use_a_wrapped_local_patch(order):
 def test_open_endpoint_deletion_publishes_a_local_boundary_patch(index):
     x = np.linspace(0.0, 20.0, 101)
     points = np.column_stack((x, 0.2 * np.sin(x)))
-    curve = PHBSpline(points)
+    curve = PHBSplineOpen(points)
     report = curve.delete_point(index)
     assert report.rebuilt_span_count == 10
     expected = points[1:] if index == 0 else points[:-1]
@@ -78,7 +79,7 @@ def test_open_endpoint_deletion_publishes_a_local_boundary_patch(index):
 
 def test_strict_local_never_silently_escalates_to_global():
     x = np.linspace(0.0, 20.0, 101)
-    curve = PHBSpline(
+    curve = PHBSplineOpen(
         np.column_stack((x, 0.2 * np.sin(x))),
         editing=EditingPolicy(initial_patch_spans=2),
     )
@@ -95,16 +96,16 @@ def test_expand_and_global_repair_are_explicit_in_reports():
     x = np.linspace(0.0, 20.0, 101)
     points = np.column_stack((x, 0.2 * np.sin(x)))
     editing = EditingPolicy(initial_patch_spans=2, max_patch_spans=16)
-    expanded = PHBSpline(points, editing=editing)
+    expanded = PHBSplineOpen(points, editing=editing)
     report = expanded.move_point(50, [10.0, -0.08], repair="expand")
     assert report.rebuilt_span_count == 10
-    global_curve = PHBSpline(points, editing=editing)
+    global_curve = PHBSplineOpen(points, editing=editing)
     report = global_curve.move_point(50, [10.0, -0.08], repair="global")
     assert report.rebuilt_span_count == global_curve.num_spans
 
 
 def test_insert_shifts_indices_without_changing_old_handles():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     old = curve.point_handle(2)
     result = curve.insert_point(2, [1.5, -0.1], repair="global")
     assert curve.index_of(result.handle) == 2
@@ -113,7 +114,7 @@ def test_insert_shifts_indices_without_changing_old_handles():
 
 
 def test_delete_stales_only_deleted_handle():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     deleted = curve.point_handle(2)
     retained = curve.point_handle(3)
     curve.delete_point(deleted, repair="global")
@@ -123,7 +124,7 @@ def test_delete_stales_only_deleted_handle():
 
 
 def test_append_prepend_and_list_insert_index_semantics():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     appended = curve.append_point([2.0, 3.0], repair="global")
     assert curve.index_of(appended.handle) == curve.num_points - 1
     prepended = curve.prepend_point([-1.0, -0.2], repair="global")
@@ -133,7 +134,7 @@ def test_append_prepend_and_list_insert_index_semantics():
 
 
 def test_failed_edit_is_exactly_atomic():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     before_points = curve.points
     before_version = curve.version
     before_handles = curve.point_handles
@@ -149,7 +150,7 @@ def test_failed_edit_is_exactly_atomic():
     [None, "xy", [1.0], [1.0, 2.0, 3.0], [True, 2.0], [1.0 + 2.0j, 2.0], [np.nan, 2.0]],
 )
 def test_malformed_edit_values_are_rejected_without_mutation(bad):
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     before = curve.points
     spans = curve._spans
     with pytest.raises((InvalidPointDataError, NonFiniteCoordinateError)):
@@ -160,7 +161,7 @@ def test_malformed_edit_values_are_rejected_without_mutation(bad):
 
 
 def test_old_location_stales_after_commit():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     location = curve.location_at_length(0.4 * curve.length)
     curve.move_point(2, [2.1, -0.8], repair="global")
     with pytest.raises(StaleLocationError):
@@ -168,7 +169,7 @@ def test_old_location_stales_after_commit():
 
 
 def test_snapshot_remains_bitwise_stable_after_edits():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     snapshot = curve.snapshot(compact=True)
     samples = np.linspace(0.0, 1.0, 31)
     before = snapshot.points_at(samples)
@@ -180,7 +181,7 @@ def test_snapshot_remains_bitwise_stable_after_edits():
 
 
 def test_transaction_commits_once_and_rolls_back_on_exception():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     with curve.edit(repair="global") as transaction:
         transaction.move_point(1, [1.1, 0.5])
         inserted = transaction.insert_point(2, [1.5, -0.1])

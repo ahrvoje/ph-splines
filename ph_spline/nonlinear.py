@@ -17,13 +17,14 @@ from __future__ import annotations
 import numpy as np
 from scipy.linalg import solve_banded
 from scipy.optimize import least_squares
-from scipy.sparse import diags_array
+from scipy.sparse import csr_array, diags_array
+from scipy.sparse.linalg import spsolve
 
 from ph_spline._constants import F_TOL, TINY, X_MIN
 from ph_spline.construction import edge_quantities, segment_alpha_beta
 from ph_spline.exceptions import SplineConvergenceError
 
-__all__ = ["solve_internal_tangents"]
+__all__ = ["solve_closed_tangents", "solve_internal_tangents"]
 
 #: Complex-step size.  Far below the square root of the smallest relative
 #: feature of the residual, so the imaginary part carries a pure derivative
@@ -201,3 +202,141 @@ def solve_internal_tangents(
             quantity="x",
         )
     return _newton_polish(x, phi, phi0, phim, lhat)
+
+
+def _closed_residual_core(
+    x: np.ndarray, phi: np.ndarray, lhat: np.ndarray
+) -> np.ndarray:
+    """Guarded cyclic logarithmic curvature mismatches."""
+    alpha = (1.0 - x) * phi
+    beta = np.roll(x * phi, -1)
+    _, _, lam0, lam1, beta1, _ = edge_quantities(alpha, beta, lhat, guarded=True)
+    log_sin = _guarded_log(np.sin(beta1))
+    log_l0 = _guarded_log(lam0)
+    log_l1 = _guarded_log(lam1)
+    log_k_end = log_sin + 0.5 * log_l0 - 1.5 * log_l1
+    log_k_start = log_sin + 0.5 * log_l1 - 1.5 * log_l0
+    return np.roll(log_k_end, 1) - log_k_start
+
+
+def _cyclic_distance(i: int, j: int, n: int) -> int:
+    distance = abs(i - j)
+    return min(distance, n - distance)
+
+
+def _closed_column_colors(n: int) -> np.ndarray:
+    """Deterministically color cyclic tridiagonal columns with <= 5 colors."""
+    colors = np.full(n, -1, dtype=np.int8)
+    for column in range(n):
+        unavailable = {
+            int(colors[other])
+            for other in range(column)
+            if _cyclic_distance(column, other, n) <= 2
+        }
+        color = 0
+        while color in unavailable:
+            color += 1
+        colors[column] = color
+    return colors
+
+
+def _closed_jacobian(
+    x: np.ndarray, phi: np.ndarray, lhat: np.ndarray
+) -> np.ndarray:
+    """Cyclic tridiagonal Jacobian by conflict-free complex-step coloring."""
+    n = x.size
+    result = np.zeros((n, n), dtype=np.float64)
+    colors = _closed_column_colors(n)
+    for color in range(int(np.max(colors)) + 1):
+        columns = np.flatnonzero(colors == color)
+        xc = x.astype(np.complex128)
+        xc[columns] += 1j * _CS_H
+        derivative_rows = np.imag(_closed_residual_core(xc, phi, lhat)) / _CS_H
+        for column in columns:
+            rows = ((column - 1) % n, column, (column + 1) % n)
+            for row in rows:
+                result[row, column] = derivative_rows[row]
+    return result
+
+
+def _closed_newton_polish(
+    x: np.ndarray, phi: np.ndarray, lhat: np.ndarray
+) -> np.ndarray:
+    """Damped box-constrained Newton polish for the cyclic system."""
+
+    def residual(value: np.ndarray) -> np.ndarray:
+        raw = _closed_residual_core(value, phi, lhat)
+        return np.asarray(raw.real if np.iscomplexobj(raw) else raw, dtype=np.float64)
+
+    f = residual(x)
+    f_norm = float(np.max(np.abs(f)))
+    for _ in range(30):
+        if not np.all(np.isfinite(f)) or f_norm <= 0.25 * F_TOL:
+            break
+        jacobian = _closed_jacobian(x, phi, lhat)
+        try:
+            if x.size > _SPARSE_THRESHOLD:
+                step = spsolve(csr_array(jacobian), -f)
+            else:
+                step = np.linalg.solve(jacobian, -f)
+        except (ValueError, RuntimeError, np.linalg.LinAlgError):
+            break
+        if not np.all(np.isfinite(step)):
+            break
+        accepted = False
+        damping = 1.0
+        for _ in range(12):
+            candidate = np.clip(x + damping * step, X_MIN, 1.0 - X_MIN)
+            candidate_f = residual(candidate)
+            if np.all(np.isfinite(candidate_f)):
+                candidate_norm = float(np.max(np.abs(candidate_f)))
+                if candidate_norm < f_norm:
+                    x, f, f_norm = candidate, candidate_f, candidate_norm
+                    accepted = True
+                    break
+            damping *= 0.25
+        if not accepted:
+            break
+    return x
+
+
+def solve_closed_tangents(
+    lhat: np.ndarray, phi: np.ndarray, x0: np.ndarray
+) -> np.ndarray:
+    """Solve the square cyclic G2 tangent system inside every wedge."""
+    n = x0.size
+
+    def fun(x: np.ndarray) -> np.ndarray:
+        raw = _closed_residual_core(x, phi, lhat)
+        return np.asarray(raw.real if np.iscomplexobj(raw) else raw, dtype=np.float64)
+
+    def jac(x: np.ndarray):
+        matrix = _closed_jacobian(x, phi, lhat)
+        return csr_array(matrix) if n > _SPARSE_THRESHOLD else matrix
+
+    try:
+        result = least_squares(
+            fun,
+            x0,
+            jac=jac,
+            bounds=(X_MIN, 1.0 - X_MIN),
+            method="trf",
+            x_scale="jac",
+            ftol=1e-15,
+            xtol=1e-15,
+            gtol=1e-15,
+            max_nfev=500,
+            tr_solver="lsmr" if n > _SPARSE_THRESHOLD else "exact",
+        )
+    except (ValueError, np.linalg.LinAlgError) as exc:
+        raise SplineConvergenceError(
+            f"Cyclic nonlinear G2 solver failed to iterate: {exc}",
+            quantity="least_squares",
+        ) from exc
+    x = np.asarray(result.x, dtype=np.float64)
+    if not np.all(np.isfinite(x)):
+        raise SplineConvergenceError(
+            "Cyclic nonlinear G2 solver produced a nonfinite iterate",
+            quantity="x",
+        )
+    return _closed_newton_polish(x, phi, lhat)

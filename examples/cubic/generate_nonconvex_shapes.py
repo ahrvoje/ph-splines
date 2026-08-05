@@ -4,7 +4,7 @@ topological constructs, illustrations, and mechanical objects.
 Run:  python examples/cubic/generate_nonconvex_shapes.py
 Output: examples/cubic/nonconvex/NN_name.png
 
-Every dataset is passed directly to one ``CubicPHSpline``.  Each plot marks
+Every dataset is passed directly to one ``CubicPHSplineOpen``.  Each plot marks
 auxiliary inflection points with translucent magenta crosses and 10
 arc-equidistant points with red circles, then independently checks the
 red-point spacing against a dense chordal measurement of the rendered geometry.

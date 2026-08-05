@@ -8,13 +8,13 @@ import numpy as np
 import pytest
 from conftest import circle_points
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 EPS = np.finfo(float).eps
 
 
 def test_frame_identities_random_points(any_case):
-    curve = CubicPHSpline(any_case)
+    curve = CubicPHSplineOpen(any_case)
     rng = np.random.default_rng(31415)
     for u in rng.random(64):
         u = float(u)
@@ -32,7 +32,7 @@ def test_frame_identities_random_points(any_case):
 
 def test_tangent_matches_chord_direction_secantly(curved_case):
     """The tangent agrees with a symmetric secant to first order."""
-    curve = CubicPHSpline(curved_case)
+    curve = CubicPHSplineOpen(curved_case)
     h = 1e-7
     for u in (0.31, 0.5, 0.77):
         p_plus = curve.point(u + h)
@@ -45,7 +45,7 @@ def test_tangent_matches_chord_direction_secantly(curved_case):
 
 def test_right_turning_sign_conventions():
     pts = circle_points(R=2.0, a0=0.2, a1=1.6, n=9, cw=True)
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     for u in np.linspace(0.0, 1.0, 21):
         u = float(u)
         kappa = curve.signed_curvature(u)
@@ -57,7 +57,7 @@ def test_right_turning_sign_conventions():
 
 def test_left_turning_sign_conventions():
     pts = circle_points(R=2.0, a0=0.2, a1=1.6, n=9, cw=False)
-    curve = CubicPHSpline(pts)
+    curve = CubicPHSplineOpen(pts)
     for u in np.linspace(0.0, 1.0, 21):
         u = float(u)
         assert curve.signed_curvature(u) > 0.0
@@ -71,7 +71,7 @@ def test_principal_normal_points_to_center():
     center = np.array([10.0, -3.0])
     for cw in (False, True):
         pts = circle_points(R=R, a0=0.1, a1=1.5, n=11, cw=cw, center=tuple(center))
-        curve = CubicPHSpline(pts)
+        curve = CubicPHSplineOpen(pts)
         for u in np.linspace(0.0, 1.0, 13):
             u = float(u)
             p = curve.point(u)
@@ -84,7 +84,7 @@ def test_principal_normal_points_to_center():
 
 def test_curvature_not_finite_differenced():
     """Curvature is exact: it matches the analytic PH formula, not a stencil."""
-    curve = CubicPHSpline(circle_points(R=1.0, a0=0.0, a1=1.4, n=8))
+    curve = CubicPHSplineOpen(circle_points(R=1.0, a0=0.0, a1=1.4, n=8))
     seg = curve._segments[2]
     t = 0.37
     sigma = seg.sigma(t)

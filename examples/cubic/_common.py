@@ -25,7 +25,7 @@ sys.path.insert(
     ),
 )
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 # Reference palette (light mode), see dataviz references/palette.md.
 SURFACE = "#fcfcfb"
@@ -59,7 +59,7 @@ plt.rcParams.update(
 )
 
 
-def verify_contract(curve: CubicPHSpline) -> None:
+def verify_contract(curve: CubicPHSplineOpen) -> None:
     """Independent spot-check of the post-construction invariants."""
     eps = np.finfo(float).eps
     for left, right in zip(curve._segments[:-1], curve._segments[1:]):
@@ -76,7 +76,7 @@ def verify_contract(curve: CubicPHSpline) -> None:
         assert abs(curve.arc_length(u) - s) <= 256.0 * eps * L + 8.0 * math.ulp(s)
 
 
-def spline_stats(curve: CubicPHSpline) -> str:
+def spline_stats(curve: CubicPHSplineOpen) -> str:
     m = curve._m
     kind = "straight" if curve._is_straight else ("ccw" if curve._tau > 0 else "cw")
     L = curve.arc_length(1.0)
@@ -113,12 +113,12 @@ def plot_example(
     points: list,
     out_dir: str,
     note: str = "",
-    curve: CubicPHSpline | None = None,
+    curve: CubicPHSplineOpen | None = None,
     comb: bool = True,
-) -> CubicPHSpline:
+) -> CubicPHSplineOpen:
     """Construct (if needed), verify, and render one example to PNG."""
     if curve is None:
-        curve = CubicPHSpline(points)
+        curve = CubicPHSplineOpen(points)
     verify_contract(curve)
 
     pts = np.asarray(curve._points, dtype=np.float64)

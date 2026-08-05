@@ -1,4 +1,4 @@
-"""PHBSpline interpolation, PH identities, high-order jets, and invariance."""
+"""PHBSplineOpen interpolation, PH identities, high-order jets, and invariance."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ import math
 import numpy as np
 import pytest
 
-from ph_spline import DiscontinuousDerivativeError, PHBSpline
+from ph_spline import DiscontinuousDerivativeError, PHBSplineClosed, PHBSplineOpen
 
 POINTS = np.array([[0.0, 0.0], [1.0, 0.4], [2.0, -0.7], [3.0, 1.1], [2.2, 2.0]])
 
 
 @pytest.mark.parametrize("order", [2, 3, 4, 6, 8])
 def test_degree_and_verified_continuity(order):
-    curve = PHBSpline(POINTS, g_order=order)
+    curve = PHBSplineOpen(POINTS, g_order=order)
     assert curve.preimage_degree == order
     assert curve.degree == 2 * curve.preimage_degree + 1
     assert curve.verified_continuity.g_order >= order
@@ -33,20 +33,20 @@ def test_degree_and_verified_continuity(order):
     ],
 )
 def test_minimum_preimage_degree_is_deduced_from_all_constraints(arguments, required):
-    curve = PHBSpline(POINTS, **arguments)
+    curve = PHBSplineOpen(POINTS, **arguments)
     assert curve.preimage_degree == required
     assert curve.degree == 2 * required + 1
 
 
 @pytest.mark.parametrize("order", [2, 4, 8])
 def test_exact_interpolation_at_all_knots(order):
-    curve = PHBSpline(POINTS, g_order=order)
+    curve = PHBSplineOpen(POINTS, g_order=order)
     for knot, expected in zip(curve._knots, POINTS):
         assert np.array_equal(curve.point(float(knot)), expected)
 
 
 def test_compiled_hodograph_is_preimage_square():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     for span in curve._spans:
         for local in np.linspace(0.0, 1.0, 9):
             local = float(local)
@@ -57,7 +57,7 @@ def test_compiled_hodograph_is_preimage_square():
 
 @pytest.mark.parametrize("u", [0.07, 0.23, 0.51, 0.79, 0.94])
 def test_parameter_first_derivative_matches_centered_difference(u):
-    curve = PHBSpline(POINTS, c_order=4)
+    curve = PHBSplineOpen(POINTS, c_order=4)
     h = 1.0e-6
     finite_difference = (curve.point(u + h) - curve.point(u - h)) / (2.0 * h)
     assert np.allclose(curve.derivative(u), finite_difference, rtol=2e-8, atol=2e-8)
@@ -65,7 +65,7 @@ def test_parameter_first_derivative_matches_centered_difference(u):
 
 @pytest.mark.parametrize("u", [0.11, 0.37, 0.83])
 def test_intrinsic_derivative_and_curvature_identities(u):
-    curve = PHBSpline(POINTS, c_order=4)
+    curve = PHBSplineOpen(POINTS, c_order=4)
     assert np.allclose(
         curve.derivative(u, 1, wrt="arc_length"), curve.tangent(u), atol=2e-13
     )
@@ -85,7 +85,7 @@ def test_intrinsic_derivative_and_curvature_identities(u):
 
 
 def test_full_jets_match_single_order_methods():
-    curve = PHBSpline(POINTS, c_order=6)
+    curve = PHBSplineOpen(POINTS, c_order=6)
     for wrt in ("parameter", "arc_length"):
         jet = curve.jet(0.37, 6, wrt=wrt)
         assert len(jet) == 7
@@ -97,12 +97,12 @@ def test_full_jets_match_single_order_methods():
 
 
 def test_parameter_derivatives_above_curve_degree_are_exact_zero():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     assert np.array_equal(curve.derivative(0.4, curve.degree + 1), [0.0, 0.0])
 
 
 def test_join_side_semantics_follow_verified_order():
-    curve = PHBSpline(POINTS, c_order=4)
+    curve = PHBSplineOpen(POINTS, c_order=4)
     knot = float(curve._knots[2])
     for order in range(5):
         left = curve.derivative(knot, order, side="left")
@@ -119,7 +119,7 @@ def test_join_side_semantics_follow_verified_order():
 def test_closed_seam_is_position_and_frame_continuous():
     angles = np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False)
     points = np.column_stack((np.cos(angles), np.sin(angles)))
-    curve = PHBSpline(points, closed=True, c_order=4)
+    curve = PHBSplineClosed(points, c_order=4)
     assert np.array_equal(curve.point(0.0), curve.point(1.0))
     assert np.allclose(curve.tangent(0.0), curve.tangent(1.0), atol=2e-13)
     assert np.allclose(
@@ -133,7 +133,7 @@ def test_closed_g8_radial_star_preserves_twelve_fold_symmetry():
         angle = math.pi * index / 12.0
         radius = 1.0 if index % 2 == 0 else 1.9
         points.append([radius * math.cos(angle), radius * math.sin(angle)])
-    curve = PHBSpline(points, closed=True, g_order=8)
+    curve = PHBSplineClosed(points, g_order=8)
     angle = math.pi / 6.0
     rotation = np.array(
         [[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]]
@@ -146,8 +146,8 @@ def test_closed_g8_radial_star_preserves_twelve_fold_symmetry():
 
 @pytest.mark.parametrize("scale", [1.0e-150, 1.0e-50, 1.0e50, 1.0e150, 1.0e307])
 def test_power_scale_invariance(scale):
-    curve = PHBSpline(POINTS)
-    scaled = PHBSpline((POINTS * scale).tolist())
+    curve = PHBSplineOpen(POINTS)
+    scaled = PHBSplineOpen((POINTS * scale).tolist())
     for u in (0.0, 0.13, 0.51, 0.87, 1.0):
         assert np.allclose(
             scaled.point(u) / scale, curve.point(u), rtol=3e-13, atol=3e-13
@@ -160,15 +160,15 @@ def test_power_scale_invariance(scale):
 
 
 def test_translation_rotation_and_reflection_invariance():
-    curve = PHBSpline(POINTS)
+    curve = PHBSplineOpen(POINTS)
     angle = 0.73
     matrix = np.array(
         [[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]]
     )
     offset = np.array([1.0e6, -2.0e6])
     transformed_points = POINTS @ matrix.T + offset
-    transformed = PHBSpline(transformed_points)
-    reflected = PHBSpline(POINTS * [1.0, -1.0])
+    transformed = PHBSplineOpen(transformed_points)
+    reflected = PHBSplineOpen(POINTS * [1.0, -1.0])
     for u in (0.09, 0.37, 0.78):
         assert np.allclose(
             transformed.point(u), curve.point(u) @ matrix.T + offset, atol=2e-9

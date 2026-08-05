@@ -2,8 +2,8 @@
 
 The provided Pythagorean-hodograph (PH) spline objects feature highly efficient, accurate and robust random-distance access through the `point_at_length` API.
 
-- Cubic PH Spline (`CubicPHSpline`) is highly efficient for static use cases.
-- PH B-spline (`PHBSpline`) supports dynamic editing (moving, adding and deleting nodes) with prescribed continuity-order constraints.
+- Cubic PH Spline (`CubicPHSplineOpen`, `CubicPHSplineClosed`) is highly efficient for static use cases.
+- PH B-spline (`PHBSplineOpen`, `PHBSplineClosed`) supports dynamic editing (moving, adding and deleting nodes) with prescribed continuity-order constraints.
 
 ## 1. Cubic PH Spline
 
@@ -15,12 +15,14 @@ verified geometry, exact arc length and fast distance-domain evaluation.
 *Locate any position by distance travelled or select two points an exact path
 distance apart.*
 
-`CubicPHSpline(points)` accepts convex, collinear and admissible nonconvex
-point data directly, without requiring tangent or curvature data. It produces
-an immutable regular spline that is G² throughout each convex run and G¹ only
-at genuine curvature-sign changes and straight/curved transitions. Every
-segment, continuity condition and numerical solve is independently verified
-before construction succeeds.
+`CubicPHSplineOpen(points)` accepts convex, collinear and admissible nonconvex
+point data directly, without requiring tangent or curvature data.
+`CubicPHSplineClosed(points)` accepts cyclic data without a repeated final
+point. Strictly convex cycles use a square cyclic solve and are G² at every
+join. General cycles reuse the same auxiliary subsegment construction as the
+open class: the seam remains G², convex runs remain G², and only genuine
+curvature-sign changes and straight/curved transitions are G¹. Every segment,
+declared continuity condition and numerical solve is independently verified.
 
 The distinguishing feature is fast, accuracy-verified arc-length evaluation
 for splines through arbitrary planar points: `point_at_length(d)` locates the
@@ -35,9 +37,9 @@ to combine closed-form arc-length inversion, near-machine-precision
 verification and single-digit-microsecond random distance access.
 
 ```python
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
-curve = CubicPHSpline([[0.0, 0.0], [1.0, 0.4], [2.0, 1.3], [2.6, 2.4]])
+curve = CubicPHSplineOpen([[0.0, 0.0], [1.0, 0.4], [2.0, 1.3], [2.6, 2.4]])
 
 curve.point(0.5)               # float64 array (2,)
 curve.tangent(0.5)             # unit tangent
@@ -52,16 +54,24 @@ u = curve.parameter_at_length(0.5 * L)
 curve.point_at_length(0.5 * L) # one locate + one inversion
 ```
 
+```python
+import numpy as np
+from ph_spline import CubicPHSplineClosed
+
+loop = CubicPHSplineClosed([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]])
+assert loop.closed and np.array_equal(loop.point(0.0), loop.point(1.0))
+```
+
 ### Gallery
 
 | | |
 |---|---|
-| ![GP circuit](examples/cubic/nonconvex/11_gp_circuit.png) | ![fish outline](examples/cubic/nonconvex/44_fish_outline.png) |
-| *One nonconvex racing-circuit spline.* | *Near-closed open fish outline.* |
-| ![Lissajous curve](examples/cubic/nonconvex/30_lissajous_2_3.png) | ![gear profile](examples/cubic/nonconvex/52_gear_wheel_profile.png) |
-| *Near-closed Lissajous 2:3.* | *Near-closed nine-tooth gear profile.* |
-| ![rounded Hilbert curve](examples/cubic/pathological/19_hilbert_curve_smoothed.png) | ![loop garland](examples/cubic/pathological/41_loop_garland.png) |
-| *Hilbert path with supported straights and rounded corners.* | *Alternating 280-degree loops with verified global arc-length inversion.* |
+| ![Open irregular coastline](examples/cubic/nonconvex/20_coastline.png) | ![Closed turbine blade section](examples/cubic_closed/002_turbine_blade_section.png) |
+| *An open, random-walk coastline with tight coves, broad headlands and many inflections.* | *A cambered axial-turbine section with a finite trailing-edge radius.* |
+| ![Tokamak flux surface](examples/cubic_closed/003_tokamak_flux_surface.png) | ![Open exhaust-header centerline](examples/cubic/nonconvex/58_exhaust_header.png) |
+| *A D-shaped magnetic-confinement surface with curvature vectors.* | *An open, asymmetric exhaust runner with alternating bends and distance stations.* |
+| ![Noncircular gear](examples/cubic_closed/005_noncircular_gear.png) | ![Open overhand trace](examples/cubic/pathological/36_overhand_scribble.png) |
+| *An elliptic pitch profile carrying fourteen smoothly resolved teeth.* | *An irregular open trace with self-crossings, tight reversals and broad sweeping arcs.* |
 
 ### Where distance-domain evaluation matters
 
@@ -107,31 +117,19 @@ roots or hyperbolic functions. Bounded Newton iterations only correct rounding.
   `1e-12` to `1e12`, chord ratios down to ~`5e-13`, and systems beyond 1000
   segments (sparse banded path).
 
-### API
+### API overview
 
-All parameters and lengths are Python or NumPy real scalars. Coordinates and
-vectors are returned as NumPy `float64` arrays of shape `(2,)`.
+`CubicPHSplineOpen(points)` and `CubicPHSplineClosed(points)` are the
+immutable concrete classes; `CubicPHSpline` is their abstract family base.
+Both expose point, frame, curvature and exact distance-domain queries, including
+`point_at_length`. The closed class lists its seam point once and verifies the
+cyclic seam independently. `aux_inflection_points` reports any inserted
+curvature-sign transitions.
 
-| Call | Result |
-|---|---|
-| `CubicPHSpline(points)` | Construct an immutable open spline from an `(n, 2)` point sequence. |
-| `point(u)` | Position at global parameter `u` in `[0, 1]`. |
-| `tangent(u)` | Unit traversal tangent. |
-| `normal(u, side="left")` | Unit left or right normal. |
-| `principal_normal(u)` | Unit normal toward the center of curvature; undefined on a straight segment. |
-| `signed_curvature(u)` | Signed scalar curvature. |
-| `curvature_vector(u)` | Left normal multiplied by signed curvature. |
-| `aux_inflection_points` | Algorithm-inserted inflection points as `{"u", "s", "x", "y"}` dicts. |
-| `arc_length(u)` | Length from the start through parameter `u`. |
-| `parameter_at_length(s)` | Parameter whose prefix length is `s`, for `s` in `[0, arc_length(1)]`. |
-| `point_at_length(s)` | Position at prefix length `s`. |
-
-All package exceptions derive from `PHSplineError`. `CubicPHSplineError` and
-`PHBSplineError` are sibling family roots; neither inherits from the other.
-Shared failures can be caught through either family. Invalid input and query
-arguments also derive from `ValueError`; numerical construction and inversion
-failures also derive from `RuntimeError`. Construction exceptions provide
-`index`, `quantity`, `value`, and `bound` diagnostic attributes.
+All package exceptions derive from `PHSplineError`.
+`CubicPHSplineError` and `PHBSplineError` are sibling family roots; input
+failures are also `ValueError` instances and numerical failures are also
+`RuntimeError` instances.
 
 ### Benchmarks
 
@@ -155,9 +153,10 @@ constant-cost elementary local inversion, never an iterative geometric search.
 
 ## 2. PH B-spline
 
-`PHBSpline` is the editable, variable-order counterpart: it accurately interpolates open
-or closed planar point sequences, verifies the requested continuity and
-regularity before publication, and retains analytic PH speed and arc-length
+The PH B-spline family is the editable, variable-order counterpart.
+`PHBSplineOpen` and `PHBSplineClosed` accurately interpolate their respective
+planar point topologies, verify the requested continuity and
+regularity before publication, and retain analytic PH speed and arc-length
 polynomials on every span. The default request is G²; `g_order`, `c_order` and
 `curvature_order` select higher geometric, parametric or arc-length-curvature
 continuity. The minimum sufficient preimage order is selected directly as
@@ -167,9 +166,9 @@ inflating that degree.
 
 ```python
 import numpy as np
-from ph_spline import PHBSpline
+from ph_spline import PHBSplineOpen
 
-curve = PHBSpline(
+curve = PHBSplineOpen(
     [[0.0, 0.0], [1.0, 0.4], [2.0, -0.7], [3.0, 1.1], [2.2, 2.0]],
     g_order=4,
 )
@@ -217,24 +216,24 @@ curvature vector—not only derivatives of scalar curvature—and
 Bernstein/preimage product identities are used directly; finite-difference
 geometry and numerical quadrature are absent from these kernels.
 
-| PH B-spline call | Purpose |
-|---|---|
-| `PHBSpline(points, closed=False, g_order=...)` | Construct and independently verify a variable-order interpolant. |
-| `derivative(u, order, wrt="parameter")` | Arbitrary-order parameter derivative vector. |
-| `jet(u, order, wrt="arc_length")` | Position and a shared intrinsic derivative jet. |
-| `curvature_vector(u, order)` | Arc-length derivative of the full curvature vector. |
-| `move_point(handle, xy)` | Strict-local atomic node move with an `EditReport`. |
-| `insert_point(index, xy)` / `delete_point(handle)` | Edit topology without renumbering retained handles. |
-| `with curve.edit() as edit:` | Batch several mutations into one verified commit. |
-| `location_at_length(s)` / `advance_by_length(location, ds)` | Edit-versioned local distance traversal. |
-| `snapshot(compact=True)` | Immutable query view unaffected by later edits. |
+### API overview
+
+`PHBSplineOpen(points, ...)` and `PHBSplineClosed(points, ...)` are the
+mutable concrete classes; `PHBSpline` is their abstract family base. Optional
+continuity keywords request G, C or arc-length-curvature continuity, with G² as
+the default.
+
+The family provides scalar and batch geometry, arbitrary-order parameter and
+arc-length derivative jets, curvature-vector jets, analytic distance queries,
+stable point handles, atomic move/insert/delete operations, edit transactions
+and immutable snapshots. Construction and edits publish state only after
+interpolation, continuity, regularity and metric verification succeed.
 
 ### PH B-spline gallery
 
 The isolated [`examples/bspline`](examples/bspline) directory contains
 generators and rendered output for all 224 referenced input cases, plus 128 PH
-B-spline-specific cases in eight feature families. Cubic-specific examples are
-kept separately in [`examples/cubic`](examples/cubic).
+B-spline-specific cases in eight feature families.
 
 | | |
 |---|---|
@@ -274,15 +273,15 @@ forward residual acceptance and point evaluation.
 
 | kind | nodes | spans | construction | `point_at_length` |
 |:--|--:|--:|--:|--:|
-| convex | 100 | 198 | 0.0367 s | 52.18 µs |
-| nonconvex | 100 | 198 | 0.0365 s | 50.44 µs |
-| convex | 1,000 | 1,998 | 0.3603 s | 41.94 µs |
-| nonconvex | 1,000 | 1,998 | 0.3326 s | 42.04 µs |
-| convex | 10,000 | 19,998 | 3.3860 s | 41.48 µs |
-| nonconvex | 10,000 | 19,998 | 3.4056 s | 42.73 µs |
+| convex | 100 | 198 | 0.0405 s | 56.96 µs |
+| nonconvex | 100 | 198 | 0.0399 s | 55.61 µs |
+| convex | 1,000 | 1,998 | 0.3981 s | 45.69 µs |
+| nonconvex | 1,000 | 1,998 | 0.3609 s | 46.06 µs |
+| convex | 10,000 | 19,998 | 3.6540 s | 47.44 µs |
+| nonconvex | 10,000 | 19,998 | 3.5769 s | 46.10 µs |
 
 Random distance access remains nearly flat as span count grows; its higher
-constant than `CubicPHSpline` buys variable degree, generic regular geometry
+constant than `CubicPHSplineOpen` buys variable degree, generic regular geometry
 and editable state.
 
 ### Benchmarks: higher continuity
@@ -293,33 +292,34 @@ than with a hidden iterative quadrature tolerance.
 
 | continuity | PH degree | construction | `point_at_length` |
 |:--|--:|--:|--:|
-| G3 | 7 | 0.4357 s | 52.96 µs |
-| G4 | 9 | 0.5532 s | 65.27 µs |
-| G6 | 13 | 0.8433 s | 107.40 µs |
-| G8 | 17 | 1.2068 s | 136.22 µs |
+| G3 | 7 | 0.4747 s | 58.23 µs |
+| G4 | 9 | 0.6006 s | 65.11 µs |
+| G6 | 13 | 0.9142 s | 118.02 µs |
+| G8 | 17 | 1.2785 s | 145.36 µs |
 
 ### Benchmarks: dynamic editing
 
 These are median end-to-end latencies from seven warmed calls to the public
 editing API. They include validation, candidate construction, independent
 verification and atomic commit. Exterior span polynomials, arc-length tables
-and inverse kernels remain bitwise shared. A Gρ edit rebuilds `2(ρ + 3)`
-compiled spans: 10/14/22 for G2/G4/G8. The current flat-array commit path still
+and inverse kernels remain bitwise shared. With the current one-midpoint basis,
+a single-node strict-local Gρ edit rebuilds `2(ρ + 3)` compiled spans:
+10/14/22 for G2/G4/G8. The current flat-array commit path still
 performs O(n) validation, prefix rebuilding and publication, so the table
 reports actual user-visible latency rather than presenting bounded numerical
 recompilation as total-size-independent execution.
 
 | nodes | continuity | median move | median insert | median delete | rebuilt spans |
 |--:|:--|--:|--:|--:|:--|
-| 100 | G2 | 3.25 ms | 3.48 ms | 3.44 ms | 10/10/10 |
-| 100 | G4 | 5.48 ms | 5.78 ms | 5.82 ms | 14/14/14 |
-| 100 | G8 | 15.25 ms | 15.47 ms | 15.51 ms | 22/22/22 |
-| 1,000 | G2 | 7.88 ms | 10.88 ms | 10.54 ms | 10/10/10 |
-| 1,000 | G4 | 10.40 ms | 13.23 ms | 13.63 ms | 14/14/14 |
-| 1,000 | G8 | 19.34 ms | 22.98 ms | 22.18 ms | 22/22/22 |
-| 10,000 | G2 | 59.40 ms | 92.70 ms | 90.10 ms | 10/10/10 |
-| 10,000 | G4 | 60.02 ms | 91.87 ms | 94.83 ms | 14/14/14 |
-| 10,000 | G8 | 70.99 ms | 104.99 ms | 102.33 ms | 22/22/22 |
+| 100 | G2 | 3.70 ms | 3.88 ms | 3.71 ms | 10/10/10 |
+| 100 | G4 | 5.90 ms | 6.54 ms | 6.50 ms | 14/14/14 |
+| 100 | G8 | 17.02 ms | 17.29 ms | 17.31 ms | 22/22/22 |
+| 1,000 | G2 | 8.83 ms | 11.95 ms | 11.34 ms | 10/10/10 |
+| 1,000 | G4 | 11.11 ms | 13.77 ms | 13.01 ms | 14/14/14 |
+| 1,000 | G8 | 19.35 ms | 23.04 ms | 22.16 ms | 22/22/22 |
+| 10,000 | G2 | 59.50 ms | 92.92 ms | 91.28 ms | 10/10/10 |
+| 10,000 | G4 | 60.69 ms | 94.32 ms | 93.19 ms | 14/14/14 |
+| 10,000 | G8 | 69.95 ms | 103.73 ms | 101.58 ms | 22/22/22 |
 
 ## References
 

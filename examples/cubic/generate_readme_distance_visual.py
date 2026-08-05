@@ -15,7 +15,7 @@ sys.path.insert(
     ),
 )
 
-from ph_spline import CubicPHSpline
+from ph_spline import CubicPHSplineOpen
 
 OUT = os.path.join(os.path.dirname(__file__), "readme_distance_evaluation.png")
 
@@ -40,9 +40,9 @@ def main() -> None:
         ],
         dtype=np.float64,
     )
-    preliminary = CubicPHSpline(base.tolist())
+    preliminary = CubicPHSplineOpen(base.tolist())
     base *= 20.0 / preliminary.arc_length(1.0)
-    curve = CubicPHSpline(base.tolist())
+    curve = CubicPHSplineOpen(base.tolist())
     total = curve.arc_length(1.0)
     if abs(total - 20.0) > 5e-13:
         raise AssertionError(f"expected a 20 m route, got {total!r}")

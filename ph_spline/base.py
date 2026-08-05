@@ -15,7 +15,8 @@ class PHSpline(ABC):
 
     Concrete spline families may add construction, editing, derivative, and
     diagnostic APIs.  The methods below are the polymorphic contract common
-    to both :class:`CubicPHSpline` and :class:`PHBSpline`.
+    to the cubic-PH and PH-B-spline family bases and their topology-specific
+    concrete classes.
     """
 
     __slots__ = ()
