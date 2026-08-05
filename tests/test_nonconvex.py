@@ -30,6 +30,36 @@ def test_single_inflection_inserts_exactly_one_auxiliary_point():
     assert curve._joint_kinds[j - 1] == "inflection"
 
 
+def test_aux_inflection_points_public_api():
+    curve = CubicPHSpline(S_POINTS)
+    points = curve.aux_inflection_points
+
+    assert len(points) == 1
+    assert set(points[0]) == {"u", "s", "x", "y"}
+    u = points[0]["u"]
+    s = points[0]["s"]
+    assert np.array_equal(
+        curve.point(u), np.array([points[0]["x"], points[0]["y"]])
+    )
+    assert s == curve.arc_length(u)
+    assert curve.parameter_at_length(s) == u
+
+
+def test_aux_inflection_points_is_empty_without_insertions():
+    curve = CubicPHSpline([[0.0, 0.0], [1.0, 0.4], [2.0, 1.3], [2.6, 2.4]])
+    assert curve.aux_inflection_points == []
+
+
+def test_aux_inflection_points_returns_fresh_mutable_data():
+    curve = CubicPHSpline(S_POINTS)
+    points = curve.aux_inflection_points
+    points[0]["x"] = math.inf
+    points.append({"u": 0.0, "s": 0.0, "x": 0.0, "y": 0.0})
+
+    assert len(curve.aux_inflection_points) == 1
+    assert math.isfinite(curve.aux_inflection_points[0]["x"])
+
+
 def test_inflection_joint_is_prescribed_g1_with_sign_flip():
     curve = CubicPHSpline(S_POINTS)
     j = curve._joint_kinds.index("inflection") + 1

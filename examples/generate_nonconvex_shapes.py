@@ -5,8 +5,9 @@ Run:  python examples/generate_nonconvex_shapes.py
 Output: examples/plots_nonconvex_shapes/NN_name.png
 
 Every dataset is passed directly to one ``CubicPHSpline``.  Each plot marks
-10 arc-equidistant points and independently checks their spacing against a
-dense chordal measurement of the rendered geometry.
+auxiliary inflection points with translucent magenta crosses and 10
+arc-equidistant points with red circles, then independently checks the
+red-point spacing against a dense chordal measurement of the rendered geometry.
 """
 
 from __future__ import annotations

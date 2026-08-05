@@ -561,6 +561,28 @@ class CubicPHSpline:
     # Public geometric evaluation (spec sections 2.2 and 11)
     # ------------------------------------------------------------------
 
+    @property
+    def aux_inflection_points(self) -> list[dict[str, float]]:
+        """Auxiliary inflection points inserted during construction.
+
+        Each item contains the global spline parameter ``u``, prefix arc
+        length ``s``, and user-coordinate position ``x``, ``y``.  A fresh
+        list and dictionaries are returned so callers cannot mutate the
+        spline's internal construction data.
+        """
+        result: list[dict[str, float]] = []
+        for info in self._inflections:
+            u = float((info.span_index + info.rho) / self._m)
+            result.append(
+                {
+                    "u": u,
+                    "s": self.arc_length(u),
+                    "x": float(info.point[0]),
+                    "y": float(info.point[1]),
+                }
+            )
+        return result
+
     def point(self, u: object) -> Vector2:
         """Point on the spline at global parameter ``u`` in ``[0, 1]``."""
         v = self._validate_u(u)

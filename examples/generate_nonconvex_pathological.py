@@ -7,8 +7,9 @@ Reliability gauntlet plus presentation pieces: near-reversal corners, deep
 combs, smoothed fractals, oscillation extremes, loop tangles, coordinate
 and curvature scale extremes, and classification-threshold riders.  Every
 case fully constructs as one verified CubicPHSpline, marks
-10 arc-equidistant red points and passes the independent dense-polyline
-equidistance check.
+auxiliary inflection points with translucent magenta crosses and 10
+arc-equidistant points with red circles, and passes the independent
+dense-polyline equidistance check.
 """
 
 from __future__ import annotations

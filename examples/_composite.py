@@ -4,8 +4,9 @@ Every example is built by one ``CubicPHSpline``.  Alternate shades expose
 the class's internally verified convex sub-splines; they are not separate
 curves and their boundaries are the section-22 G1 joints, never G0 cuts.
 
-It also provides the gallery renderer: every plot marks 10 points that are
-equidistant in arc length (red), and an inset strip verifies their spacing
+It also provides the gallery renderer: every plot marks auxiliary inflection
+points with translucent magenta crosses and 10 points that are equidistant in
+arc length with red circles.  An inset strip verifies the red-point spacing
 **independently** by measuring the gaps on a dense sampled polyline of the
 rendered geometry - a chordal integration that never consults the package's
 closed-form arc length.
@@ -31,6 +32,8 @@ from cubic_ph_spline import CubicPHSpline
 
 #: Categorical slot 8 (red) from the validated reference palette.
 SERIES_RED = "#e34948"
+#: Magenta used for translucent auxiliary-inflection crosses.
+SERIES_MAGENTA = "#d946ef"
 #: Sequential blue step 300: the alternating run shade.
 SERIES_SPLINE_ALT = "#6da7ec"
 
@@ -256,6 +259,27 @@ def plot_nonconvex(
             label="input points",
         )
         handles.append(h_pts)
+
+    aux_inflections = comp.curve.aux_inflection_points
+    if aux_inflections:
+        aux_xy = np.array(
+            [[item["x"], item["y"]] for item in aux_inflections],
+            dtype=np.float64,
+        )
+        aux_display = disp(aux_xy)
+        (h_aux,) = ax.plot(
+            aux_display[:, 0],
+            aux_display[:, 1],
+            linestyle="none",
+            marker="x",
+            markersize=5.0,
+            color=SERIES_MAGENTA,
+            markeredgewidth=0.9,
+            alpha=0.5,
+            zorder=7,
+            label="auxiliary inflection points",
+        )
+        handles.append(h_aux)
 
     md = disp(marks)
     (h_red,) = ax.plot(
