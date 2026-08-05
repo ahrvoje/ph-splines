@@ -23,7 +23,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
-from cubic_ph_spline import CubicPHSpline
+from ph_spline import CubicPHSpline
 
 SIZES = [100, 1_000, 10_000]
 QUERIES = 1_000

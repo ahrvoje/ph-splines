@@ -2152,9 +2152,10 @@ For straight data verify that:
 # 20. Suggested package organization
 
 ```text
-cubic_ph_spline/
+ph_spline/
     __init__.py
-    spline.py
+    base.py
+    cubic.py
     segment.py
     construction.py
     nonlinear.py
@@ -2167,7 +2168,8 @@ cubic_ph_spline/
 
 Responsibilities:
 
-- `spline.py`: public class and global parameter dispatch;
+- `base.py`: common abstract `PHSpline` geometry and distance interface;
+- `cubic.py`: public `CubicPHSpline` class and global parameter dispatch;
 - `segment.py`: immutable cubic PH segment representation;
 - `construction.py`: input classification, endpoint tangents, PH edge lengths;
 - `nonlinear.py`: bounded tridiagonal $G^2$ solve;
@@ -2176,9 +2178,11 @@ Responsibilities:
 - `exceptions.py`: exception hierarchy;
 - `typing.py`: public and internal type aliases.
 
-The public namespace should expose only:
+The public namespace should expose the common base, the cubic implementation,
+and their documented exception types:
 
 ```text
+PHSpline
 CubicPHSpline
 CubicPHSplineError
 ```

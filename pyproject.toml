@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cubic-ph-spline"
-version = "1.1.0"
-description = "Planar cubic PH spline interpolation of convex and nonconvex data with rigorous numerics"
+version = "1.2.0"
+description = "Planar PH spline interpolation, distance access, and variable-order dynamic editing"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -27,10 +27,10 @@ test = ["pytest>=8"]
 examples = ["matplotlib>=3.7"]
 
 [tool.setuptools]
-packages = ["cubic_ph_spline"]
+packages = ["ph_spline"]
 
 [tool.setuptools.package-data]
-cubic_ph_spline = ["py.typed"]
+ph_spline = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

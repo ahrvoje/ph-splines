@@ -35,7 +35,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir))
 
-from cubic_ph_spline import CubicPHSpline
+from ph_spline import CubicPHSpline
 
 # sampling period [s], number of points, PH CPU time [s], polynomial CPU time [s]
 PAPER_ROWS = (
