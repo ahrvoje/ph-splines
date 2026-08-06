@@ -1,9 +1,8 @@
 # PH Splines
 
-This Python package provides planar Pythagorean-hodograph (PH) splines (Farouki
-and Sakkalis, 1990 [[1]](#ref-1); Albrecht and Farouki, 1996 [[4]](#ref-4)) in
-cubic (Jaklič et al., 2010 [[5]](#ref-5)) and B-spline (Albrecht et al., 2017
-[[8]](#ref-8)) forms, centered on
+This Python package provides planar Pythagorean-hodograph (PH) splines
+[[1]](#ref-1) [[4]](#ref-4) in cubic [[5]](#ref-5) and B-spline
+[[8]](#ref-8) forms, centered on
 distance-based evaluation through the `point_at_length` API. Their defining PH
 property makes speed polynomial, so arc length is an exactly evaluable
 piecewise-polynomial function of the spline parameter, making distance queries
@@ -15,7 +14,7 @@ convenient, efficient and robust without demanding numerical quadrature.
 ## 1. Cubic PH Spline
 
 Point-interpolating planar **cubic Pythagorean-hodograph (PH) splines** with
-verified geometry, exact arc length and fast distance-domain evaluation.
+verified geometry, exact arc length and closed-form arc-length inversion.
 
 ![A 20-metre spline route with exact distance stations and two points five metres of travel apart](examples/cubic/readme_distance_evaluation.png)
 
