@@ -2,10 +2,10 @@
 
 This Python package provides planar Pythagorean-hodograph (PH) splines
 [[1]](#ref-1) [[4]](#ref-4) in cubic [[5]](#ref-5) and B-spline
-[[8]](#ref-8) forms, centered on
-distance-based evaluation through the `point_at_length` API. Their defining PH
+[[8]](#ref-8) forms, focused on distance-based queries like
+the `point_at_length` API. Their defining PH
 property makes speed polynomial, so arc length is an exactly evaluable
-piecewise-polynomial function of the spline parameter, making distance queries
+piecewise-polynomial function of the spline parameter, making random distance access
 convenient, efficient and robust without demanding numerical quadrature.
 
 - Cubic PH Spline (`CubicPHSplineOpen`, `CubicPHSplineClosed`) is highly efficient for static use cases.
