@@ -170,7 +170,7 @@ def test_old_location_stales_after_commit():
 
 def test_snapshot_remains_bitwise_stable_after_edits():
     curve = PHBSplineOpen(POINTS)
-    snapshot = curve.snapshot(compact=True)
+    snapshot = curve.snapshot()
     samples = np.linspace(0.0, 1.0, 31)
     before = snapshot.points_at(samples)
     curve.move_point(2, [2.1, -0.8], repair="global")

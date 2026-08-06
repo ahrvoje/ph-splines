@@ -89,7 +89,7 @@ The first production version SHALL implement:
 - local transactional reconstruction;
 - exact analytic forward arc length;
 - efficient scalar and vectorized distance-domain evaluation;
-- arbitrary-order parameter and arc-length derivative vectors and curvature-vector derivatives;
+- arbitrary-order spline-parameter derivative vectors and curvature-vector derivatives;
 - deterministic binary64 numerics with explicit failure modes;
 - immutable query snapshots;
 - typed exceptions and diagnostics;
@@ -137,8 +137,8 @@ order zero. Both concrete PH B-spline classes SHALL additionally expose named
 arbitrary-order vector queries:
 
 ```python
-derivative(u, order=1, *, wrt="parameter", side="auto") -> np.ndarray
-curvature_vector(u, order=0, *, wrt="arc_length", side="auto") -> np.ndarray
+derivative(u, order=1, *, side="auto") -> np.ndarray
+curvature_vector(u, order=0, *, side="auto") -> np.ndarray
 ```
 
 These methods are not numerical-differentiation conveniences. They are required geometry kernels with elementary coefficient formulas, scale-aware error control, and the same strict failure behavior as distance and curvature evaluation.
@@ -173,7 +173,7 @@ The PH B-spline family differs from `CubicPHSplineOpen` in the following mandato
 | Metric index | Flat compensated prefix array | Flat compensated prefix array in the reference profile; an augmented tree is a future extension |
 | Nonconvex handling | Specialized cubic preprocessing | No convexity admissibility restriction; generic regular PH solve |
 | Continuity | G2 on convex runs, G1 at selected transitions | User-selected finite G, C, and curvature continuity, verified at every join |
-| Geometry queries | Tangent and order-zero curvature vector | Arbitrary-order parameter/arc-length derivative vectors and curvature-vector derivatives |
+| Geometry queries | Tangent and order-zero curvature vector | Arbitrary-order spline-parameter derivative vectors and curvature-vector derivatives |
 | Local editing | Not supported | Move/insert/delete with bounded local patch mode |
 | Representation | Cubic Bezier plus linear preimage | Variable-order B-spline preimage plus per-span Bernstein kernels |
 
@@ -665,7 +665,6 @@ def derivative(
     u: Real,
     order: int = 1,
     *,
-    wrt: Literal["parameter", "arc_length"] = "parameter",
     side: Literal["auto", "left", "right"] = "auto",
 ) -> NDArray[np.float64]: ...
 def tangent(self, u: Real) -> NDArray[np.float64]: ...
@@ -677,7 +676,6 @@ def curvature_vector(
     u: Real,
     order: int = 0,
     *,
-    wrt: Literal["arc_length", "parameter"] = "arc_length",
     side: Literal["auto", "left", "right"] = "auto",
 ) -> NDArray[np.float64]: ...
 def curvature_derivative(
@@ -685,7 +683,6 @@ def curvature_derivative(
     u: Real,
     order: int = 1,
     *,
-    wrt: Literal["arc_length", "parameter"] = "arc_length",
     side: Literal["auto", "left", "right"] = "auto",
 ) -> float: ...
 def jet(
@@ -693,7 +690,6 @@ def jet(
     u: Real,
     order: int,
     *,
-    wrt: Literal["parameter", "arc_length"] = "parameter",
     side: Literal["auto", "left", "right"] = "auto",
 ) -> tuple[NDArray[np.float64], ...]: ...
 def curvature_vector_jet(
@@ -701,22 +697,32 @@ def curvature_vector_jet(
     u: Real,
     order: int,
     *,
-    wrt: Literal["arc_length", "parameter"] = "arc_length",
     side: Literal["auto", "left", "right"] = "auto",
 ) -> tuple[NDArray[np.float64], ...]: ...
 ```
 
-`derivative(u, r, wrt=q)` returns the vector $D_q^r z$ for any nonnegative integer `r` permitted by the configured evaluation-order resource limit. That limit is `NumericalPolicy.max_evaluation_order`. Order zero is exactly `point(u)`. The parameter derivative is with respect to the package global compatibility parameter, not the local span coordinate. The arc-length derivative satisfies `derivative(u, 1, wrt="arc_length") == tangent(u)` within its certified rounding bound. The tangent remains a unit-vector convenience and MUST NOT be used as a substitute for the generally nonunit first parameter derivative.
+`derivative(u, r)` returns $D_u^r z$ for any nonnegative integer `r`
+permitted by `NumericalPolicy.max_evaluation_order`. Order zero is exactly
+`point(u)`. Differentiation is always with respect to the normalized global
+spline parameter `u`, never the local span coordinate. `tangent(u)` is the
+normalized first derivative and MUST NOT substitute for the generally nonunit
+`derivative(u, 1)`.
 
-Let $C_0=\kappa N_L$ be the ordinary curvature vector. `curvature_vector(u, j, wrt=q)` returns $D_q^j C_0$, not merely $(D_q^j\kappa)N_L$. Consequently,
+Let $C_0=\kappa N_L=D_s^2z$ be the ordinary curvature vector.
+`curvature_vector(u, j)` returns $D_u^j C_0$, not merely
+$(D_u^j\kappa)N_L$.
 
-$$
-C_j^{(s)}=D_s^{j+2}z.
-$$
+The no-keyword call `curvature_vector(u)` retains the cubic-family order-zero
+result. `jet(..., order=r)` returns $(z,D_uz,\ldots,D_u^rz)$, and
+`curvature_vector_jet(..., order=j)` returns
+$(C_0,D_uC_0,\ldots,D_u^jC_0)$. A full jet SHALL share one recurrence and
+workspace; it MUST NOT invoke the single-order method repeatedly.
 
-The no-keyword call `curvature_vector(u)` retains the `CubicPHSplineOpen` order-zero result. `jet(..., order=r)` returns $(z,D_qz,\ldots,D_q^rz)$, and `curvature_vector_jet(..., order=j)` returns $(C_0,D_qC_0,\ldots,D_q^jC_0)$. A full jet SHALL share one recurrence and workspace; it MUST NOT invoke the single-order method repeatedly.
-
-`order` SHALL accept Python and NumPy integer scalars, reject booleans and nonintegral values, and be nonnegative. An order above the configured resource limit raises `ResourceLimitError`. A parameter derivative whose order exceeds the local curve degree is the exact zero vector. Arc-length derivatives and curvature-vector derivatives do not generally terminate with polynomial degree.
+`order` SHALL accept Python and NumPy integer scalars, reject booleans and
+nonintegral values, and be nonnegative. An order above the configured resource
+limit raises `ResourceLimitError`. A curve derivative whose order exceeds the
+local curve degree is the exact zero vector. Curvature and curvature-vector
+derivatives are rational and do not generally terminate at that degree.
 
 At a join, `side="left"` or `side="right"` requests that one-sided value. With `side="auto"`, the evaluator SHALL return a common value only when the relevant left/right jets agree within their independently computed error bounds; otherwise it raises `DiscontinuousDerivativeError`. At an open endpoint, `auto` selects the interior side and an explicitly unavailable side is invalid. Away from a join, `side` does not change the result.
 
@@ -770,7 +776,6 @@ def derivatives_at(
     u: ArrayLike,
     order: int = 1,
     *,
-    wrt: Literal["parameter", "arc_length"] = "parameter",
     side: Literal["auto", "left", "right"] = "auto",
     out: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]: ...
@@ -779,7 +784,6 @@ def curvature_vectors_at(
     u: ArrayLike,
     order: int = 0,
     *,
-    wrt: Literal["arc_length", "parameter"] = "arc_length",
     side: Literal["auto", "left", "right"] = "auto",
     out: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]: ...
@@ -840,13 +844,12 @@ the operation.
 ## 6.7 Snapshots
 
 ```python
-def snapshot(self, *, compact: bool = False) -> PHBSplineSnapshot: ...
+def snapshot(self) -> PHBSplineSnapshot: ...
 ```
 
 A snapshot SHALL be immutable with respect to later source-object edits and
 SHALL expose the scalar and batch query API but no mutation API. The reference
-snapshot retains the already-published immutable spans and arrays for either
-value of `compact`; the flag is reserved for a future storage distinction.
+snapshot retains the already-published immutable spans and arrays.
 
 ## 6.8 Stable handles and locations
 
@@ -879,28 +882,14 @@ The package SHALL expose policies at public or advanced-public scope. Defaults b
 @dataclass(frozen=True, slots=True)
 class ConstructionPolicy:
     parameterization: Literal["centripetal", "chord", "uniform"] = "centripetal"
-    shape_objective: Literal["preimage_strain", "guide_fairness"] = "preimage_strain"
     max_iterations: int = 48
     max_line_search_steps: int = 16
-    max_hidden_spans_per_input_span: int = 8
-    max_refinement_rounds: int = 6
-    initial_trust_radius: float = 0.25
-    interpolation_weight: float = 1.0
-    guide_weight: float = 1.0
-    strain_weight: float = 1.0e-3
-    speed_variation_weight: float = 1.0e-4
-    deterministic: bool = True
 ```
 
-Random initialization is forbidden in deterministic mode.
-
-In the reference profile, `parameterization`, `max_iterations`, and
-`max_line_search_steps` affect construction. The remaining fields are
-accepted, validated compatibility placeholders for planned shape optimization
-and adaptive refinement; they currently have no effect on the constructed
-curve. An implementation reproducing the reference profile SHALL use the
-guide projection in Section 10.7 and SHALL NOT silently activate a different
-objective because one of these reserved weights is nonzero.
+All three fields affect construction. Random initialization is forbidden; the
+reference profile always uses the deterministic guide projection in Section
+10.7. A new shape objective or adaptive-refinement control SHALL become public
+only together with its implementation, specification, and regression tests.
 
 ## 7.2 `EditingPolicy`
 
@@ -910,19 +899,13 @@ class EditingPolicy:
     default_repair: Literal["strict_local", "expand", "global"] = "strict_local"
     initial_patch_spans: int | None = None       # None -> 2*(m + 3)
     max_patch_spans: int = 64
-    expansion_factor: float = 2.0
-    leaf_capacity: int = 128
-    preserve_outside_bitwise: bool = True
 ```
 
 `strict_local` SHALL never silently perform a global rebuild. In the reference
 profile, the geometric patch is always the order-derived patch in Section
 11.3. `initial_patch_spans` and `max_patch_spans` are post-construction
 admission limits, not patch-size selectors; `expand` admits that same patch
-against `max_patch_spans` and does not yet perform repeated geometric growth.
-`global` rebuilds the entire spline. True repeated patch expansion and
-`leaf_capacity` are future extensions and MUST NOT be reported as active by a
-reference-profile implementation.
+against `max_patch_spans`. `global` rebuilds the entire spline.
 
 ## 7.3 `InversePolicy`
 
@@ -932,37 +915,26 @@ class InversePolicy:
     lut_nodes_min: int = 8
     lut_nodes_max: int = 128
     lut_power_of_two: bool = True
-    seed_kind: Literal["monotone_cubic", "linear"] = "monotone_cubic"
     fast_iterations: int = 2
     max_iterations: int = 67
-    use_halley: bool = True
-    fallback: Literal["itp", "bisection"] = "itp"
     endpoint_reverse_threshold: float = 0.5
 ```
 
-The reference inverse uses `lut_nodes_min`, `lut_nodes_max`,
-`lut_power_of_two`, `fast_iterations`, `max_iterations`, and
-`endpoint_reverse_threshold`. It uses a linear length-within-LUT-cell seed,
-Newton correction, and bisection fallback. `seed_kind`, `use_halley`, and
-`fallback` are reserved compatibility fields in this profile.
+Every field affects the reference inverse. It uses a linear
+length-within-LUT-cell seed, Newton correction, and bisection fallback.
 
 ## 7.4 `NumericalPolicy`
 
 ```python
 @dataclass(frozen=True, slots=True)
 class NumericalPolicy:
-    dtype: Literal["float64"] = "float64"
     regularity_ratio_min: float = 1.0e-12
     max_preimage_degree: int = 16
     max_evaluation_order: int = 64
     max_regularization_subdivision_depth: int = 24
     parameter_ulp_slack: int = 4
     position_eps_factor: float = 256.0
-    tangent_abs_tol: float = 1.0e-12
-    curvature_rel_tol: float = 1.0e-10
     continuity_eps_factor: float = 1024.0
-    inverse_eps_factor: float = 64.0
-    use_longdouble_verification: Literal["auto", "never", "always"] = "auto"
     reject_unresolved_global_lengths: bool = True
 ```
 
@@ -970,11 +942,7 @@ Requests requiring a preimage degree above `max_preimage_degree` SHALL raise `Re
 
 `max_evaluation_order` is a resource guard, not a mathematical restriction on the API. Users MAY explicitly increase it. Implementations SHALL reject an order before allocating order-dependent work when it exceeds the configured limit.
 
-The active reference numerical fields are `regularity_ratio_min`,
-`max_preimage_degree`, `max_evaluation_order`,
-`max_regularization_subdivision_depth`, `position_eps_factor`, and
-`reject_unresolved_global_lengths`. Other fields remain public compatibility
-placeholders until the corresponding documented verifier is implemented.
+Every public numerical-policy field affects the reference implementation.
 
 # 8. Internal architecture
 
@@ -1277,10 +1245,10 @@ J_F\delta c=-F.
 $$
 
 This local projection keeps the converged branch near the guide without
-introducing additional objective weights. The public `shape_objective` and
-shape-weight fields are reserved in this profile. Activating a fairness
-objective changes the specified curve and requires a new documented profile
-and new regression fixtures.
+introducing additional objective weights. No shape-objective argument is
+exposed. Adding a fairness objective changes the specified curve and requires
+a documented implementation and new regression fixtures before it becomes
+part of the public API.
 
 ## 10.8 Nonlinear method
 
@@ -1384,7 +1352,7 @@ $$
 
 This closure condition prevents a local hodograph change from translating the entire downstream curve.
 
-If `preserve_outside_bitwise=True`, unchanged span objects SHALL be structurally shared and therefore bitwise identical.
+Unchanged span objects SHALL be structurally shared and therefore bitwise identical.
 
 ## 11.3 Patch size
 
@@ -1761,21 +1729,6 @@ The width-ratio clamp in Section 10.2 bounds the dominant high-order scale
 growth. Every final scalar/vector is checked for finiteness and raises
 `NumericalPrecisionError` if it is not representable.
 
-For intrinsic derivatives, let
-
-$$
-\beta(\nu)=\frac{ds}{d\nu}=h|w(\nu)|^2,
-\qquad D_s=\beta^{-1}D_\nu.
-$$
-
-The evaluator SHALL form normalized Taylor coefficients and apply the recurrence
-
-$$
-Z_0=z,\qquad Z_{r+1}=\beta^{-1}D_\nu Z_r,
-$$
-
-as truncated series through the requested order. Series multiplication and reciprocal are finite elementary coefficient operations. Normalized coefficients (derivative divided by factorial) SHALL be used internally to avoid factorial and binomial overflow. One request for an order-$r$ jet SHALL cost bounded local work, normally $O(mr+r^2)$ arithmetic and $O(r)$ workspace, independent of total spline size.
-
 ## 15.3 Tangent
 
 Evaluate the preimage $w=a+ib$, scale it by its norm, and square the normalized complex number:
@@ -1790,7 +1743,14 @@ $$
 T_x=(r-s)(r+s),\qquad T_y=2rs,
 $$
 
-where $r=a/|w|$, $s=b/|w|$. Renormalize only when the squared norm differs from one by more than a documented rounding threshold. This optimized kernel SHALL agree with `derivative(u, 1, wrt="arc_length")` within the combined error bounds.
+where $r=a/|w|$, $s=b/|w|$. Renormalize only when the squared norm differs
+from one by more than a documented rounding threshold. This optimized kernel
+SHALL agree, within the combined error bounds, with
+
+$$
+\frac{\operatorname{derivative}(u,1)}
+{\lVert\operatorname{derivative}(u,1)\rVert}.
+$$
 
 ## 15.4 Curvature and curvature-vector derivatives
 
@@ -1815,13 +1775,19 @@ C_0(t)=\kappa N_L
 =D_s^2z(t).
 $$
 
-For $q\in\{t,s\}$, the requested higher-order curvature vector is
+The requested higher-order curvature vector is differentiated with respect to
+the normalized global spline parameter:
 
 $$
-C_j^{(q)}=D_q^j C_0.
+C_j=D_u^j C_0.
 $$
 
-For `wrt="parameter"`, construct truncated series for $A$, $B$, $w^2$, and $B^{-1}$, then obtain the requested vector by finite series multiplication. For `wrt="arc_length"`, apply $D_s=B^{-1}D_t$, with the required local/global scale conversion, or reuse the curve arc-length jet through order $j+2$. The latter path SHALL satisfy $C_j^{(s)}=D_s^{j+2}z$ by construction and is preferred when it has the tighter error bound. `curvature_derivative` uses the same $2AB^{-2}$ series but returns the scalar derivative; a curvature-vector derivative is not formed by multiplying that scalar by a fixed normal.
+Construct truncated series for $A$, $B$, $w^2$, and $B^{-1}$, form
+$C_0=D_s^2z$, and then obtain its parameter derivatives by finite series
+operations with the required local/global scale conversion.
+`curvature_derivative` uses the same $2AB^{-2}$ series but returns the
+parameter derivative of the scalar curvature; a curvature-vector derivative
+is not formed by multiplying that scalar by a fixed normal.
 
 Preimage derivatives SHALL be evaluated from Bernstein forward differences.
 Taylor reciprocal SHALL begin only after span regularity has established a
@@ -1917,7 +1883,15 @@ SHALL use stable `sinc`-style series or half-angle forms near zero.
 
 ## 16.6 Determinism
 
-Given identical binary64 inputs, policies, package version, NumPy/SciPy major versions, and execution architecture, construction SHALL be deterministic. Thread-count-dependent reductions SHALL be avoided in acceptance-critical code.
+Given identical binary64 inputs, policies, package version, NumPy/SciPy major
+versions, and execution architecture, construction SHALL be deterministic.
+Initializer order, square-root signs, seam monodromy, damping order, line
+search, and exact-tie decisions are specified; construction does not depend on
+randomness, container iteration order, or an unspecified root ordering from a
+third-party routine. Thread-count-dependent reductions SHALL be avoided in
+acceptance-critical code. Different architectures or dependency versions need
+not be bitwise identical, but they SHALL satisfy the same verified geometric
+contract and deterministic decision rules.
 
 ## 16.7 High-order geometry evaluation
 
@@ -2114,7 +2088,7 @@ For fixed $m$, bounded hidden-span ratio, and bounded $I$:
 | Local geometry solve/compilation only | `O(K*m^3*I)`, with order-derived bounded `K` |
 | Total strict-local move/insert/delete | `O(N + K*m^3*I)` in the reference flat-prefix profile |
 | Flat metric-prefix rebuild | `O(M)` |
-| Compact snapshot build | `O(M)` |
+| Snapshot build | `O(1)` shared state |
 | Sequential cursor advance | amortized `O(1 + crossed_spans)` |
 
 Absolute timing targets SHALL be benchmark gates, not API guarantees. The
@@ -2123,7 +2097,7 @@ the latter currently includes linear validation and prefix publication. A
 future augmented-tree profile may target:
 
 - mutable scalar random `point_at_length`: median below 15 microseconds for 100 to 100,000 spans;
-- compact snapshot scalar random `point_at_length`: median below 8 microseconds where Python dispatch dominates;
+- snapshot scalar random `point_at_length`: median below 8 microseconds where Python dispatch dominates;
 - one-point strict-local geometry reconstruction approximately independent of
   total `N`, with total reference-profile latency reported separately;
 - no more than two Newton corrections for at least 99.9 percent of benchmark
@@ -2288,13 +2262,19 @@ monotonicity, bracket preservation, and absence of warnings/NaNs.
 
 ## 22.6 Arbitrary-order geometry queries
 
-For parameter derivatives, arc-length derivatives, scalar curvature derivatives, and curvature-vector derivatives, test every order from zero through at least 12 and selected orders through the configured default limit. Include endpoints, exact and near joins, inflections, certified straight spans, minimum-speed locations, alternating coefficient scales, and orders above the polynomial degree. Verify `side="auto"`, explicit one-sided values, and the required discontinuity exception at joins whose available continuity is too low.
+For curve, scalar-curvature, and curvature-vector parameter derivatives, test
+every order from zero through at least 12 and selected orders through the
+configured default limit. Include endpoints, exact and near joins,
+inflections, certified straight spans, minimum-speed locations, alternating
+coefficient scales, and orders above the polynomial degree. Verify
+`side="auto"`, explicit one-sided values, and the required discontinuity
+exception at joins whose available continuity is too low.
 
 Check the identities
 
 $$
-D_s z=T,\qquad D_s^2z=\kappa N_L,\qquad
-D_s^j(\kappa N_L)=D_s^{j+2}z
+T=\frac{D_u z}{\lVert D_u z\rVert},\qquad
+C_0=\kappa N_L=D_s^2z
 $$
 
 against independently evaluated left/right jets and high-precision references. Compare the single-order methods with their full-jet counterparts, require exact structural zeros where specified, and exercise invalid types, negative orders, resource-limit rejection, and output overflow/underflow. Finite-difference comparisons MAY be used as low-precision smoke tests only; they are not acceptance oracles.
@@ -2311,10 +2291,10 @@ Verify:
 
 - positions transform correctly;
 - tangents rotate/reflect correctly;
-- parameter derivative vectors transform with the spatial scale, and arc-length derivative order $r$ scales as $|\lambda|^{1-r}$ with the corresponding orthogonal vector transform;
+- parameter derivative vectors transform with the spatial scale and the corresponding orthogonal vector transform;
 - lengths scale by absolute scale;
 - curvature scales inversely;
-- the $j$th arc-length derivative of the curvature vector scales as $|\lambda|^{-j-1}$ with the corresponding orthogonal vector transform;
+- every parameter derivative of the curvature vector scales inversely with spatial scale and with the corresponding orthogonal vector transform;
 - distance inversion returns corresponding locations;
 - edit locality and handle identity remain unchanged.
 
@@ -2327,7 +2307,7 @@ Use property-based testing where practical. Fuzz:
 - edit sequences;
 - flat-prefix exact boundaries and structural-sharing edges;
 - extreme distance values;
-- derivative orders, `wrt` modes, and join-side selections;
+- derivative orders and join-side selections;
 - LUT sizes;
 - serialized data corruption.
 
@@ -2456,9 +2436,9 @@ u = curve.parameter_at_length(0.37 * L)
 t = curve.tangent(u)
 
 # Elementary arbitrary-order geometry kernels; no numerical differencing.
-d5 = curve.derivative(u, 5, wrt="parameter")
-k3 = curve.curvature_vector(u, 3)  # D_s^3(kappa * N_left) = D_s^5 z
-z_jet = curve.jet(u, 6, wrt="arc_length")
+d5 = curve.derivative(u, 5)
+k3 = curve.curvature_vector(u, 3)  # D_u^3(kappa * N_left)
+z_jet = curve.jet(u, 6)
 k_jet = curve.curvature_vector_jet(u, 4)
 
 # Stable handle survives insertion and index shifts.
@@ -2479,7 +2459,7 @@ assert curve_c4.preimage_degree == 4
 assert curve_c4.degree == 2 * curve_c4.preimage_degree + 1
 
 # Lock-free query object.
-snapshot = curve.snapshot(compact=True)
+snapshot = curve.snapshot()
 positions = snapshot.points_at_length(np.linspace(0.0, snapshot.length, 10000))
 ```
 
@@ -2710,15 +2690,18 @@ $$
 C_0(t)=2A(t)\,i\,w(t)^2B(t)^{-3}.
 $$
 
-Use finite formal-series multiplication, reciprocal, and differentiation to obtain the parameter derivatives. Compute one reciprocal series for $B^{-1}$ and obtain $B^{-2}$ and $B^{-3}$ by multiplication; do not run independent divisions for each requested order. Convert any scalar or vector field $F$ to arc-length derivatives recursively with
-
-$$
-F_0=F,
-\qquad
-F_{j+1}=B^{-1}\frac{dF_j}{dt}.
-$$
-
-Use $F=z$, $F=\kappa$, or $F=C_0$ for the curve derivative, scalar-curvature, or curvature-vector jet respectively. The recurrence applies componentwise to vector fields. Normalized Taylor coefficients SHALL be used throughout, and conversion to ordinary derivative values occurs once at the API boundary with checked exponent scaling. This elementary procedure, or an algebraically identical generated recurrence, SHALL be used in production and verification. A general-purpose automatic-differentiation dependency is unnecessary, and numerical differencing is not acceptable.
+Use finite formal-series multiplication, reciprocal, and differentiation to
+obtain the parameter derivatives. Compute one reciprocal series for $B^{-1}$
+and obtain $B^{-2}$ and $B^{-3}$ by multiplication; do not run independent
+divisions for each requested order. Use $F=z$, $F=\kappa$, or $F=C_0$ for the
+curve, scalar-curvature, or curvature-vector parameter jet respectively. The
+recurrence applies componentwise to vector fields. Normalized Taylor
+coefficients SHALL be used throughout, and conversion to ordinary derivative
+values occurs once at the API boundary with checked exponent scaling. This
+elementary procedure, or an algebraically identical generated recurrence,
+SHALL be used in production and verification. A general-purpose
+automatic-differentiation dependency is unnecessary, and numerical
+differencing is not acceptable.
 
 # Appendix D. Benchmark reporting template
 
@@ -2773,7 +2756,7 @@ reference-profile conforming unless every row is true.
 | Local patch | $m+3$ logical intervals, fixed exterior jets through $m-1$ | order-independent 7/7/6 folklore |
 | Wrapped edit | solve in lifted open gauge; transport by $\eta$ on crossing | treating array index zero as an ordinary join |
 | Publication | structurally share exterior spans; rebuild verified flat prefixes | claiming current total edit cost is size-independent |
-| Inverse | parameter-uniform LUT, linear seed, bracketed Newton/bisection | claiming reserved Halley/ITP/monotone-cubic controls are active |
+| Inverse | parameter-uniform LUT, linear seed, bracketed Newton/bisection | undocumented alternate seed or iteration method |
 
 At minimum, reconstruction acceptance SHALL include exact
 `preimage_degree == r_*` tests, G2/G4/G8 interpolation and jet checks, the G8

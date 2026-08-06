@@ -179,13 +179,9 @@ class PHBSpline(PHSpline):
         construction = self._construction
         if construction.parameterization not in ("centripetal", "chord", "uniform"):
             raise ValueError("ConstructionPolicy.parameterization is invalid")
-        if construction.shape_objective not in ("preimage_strain", "guide_fairness"):
-            raise ValueError("ConstructionPolicy.shape_objective is invalid")
         construction_integers = (
             construction.max_iterations,
             construction.max_line_search_steps,
-            construction.max_hidden_spans_per_input_span,
-            construction.max_refinement_rounds,
         )
         if any(
             isinstance(value, (bool, np.bool_))
@@ -196,25 +192,6 @@ class PHBSpline(PHSpline):
             raise ValueError(
                 "ConstructionPolicy integer limits must be nonnegative integers"
             )
-        construction_weights = (
-            construction.initial_trust_radius,
-            construction.interpolation_weight,
-            construction.guide_weight,
-            construction.strain_weight,
-            construction.speed_variation_weight,
-        )
-        if any(
-            isinstance(value, (bool, np.bool_))
-            or not isinstance(value, numbers.Real)
-            or not math.isfinite(float(value))
-            or float(value) < 0.0
-            for value in construction_weights
-        ):
-            raise ValueError(
-                "ConstructionPolicy weights must be finite and nonnegative"
-            )
-        if not isinstance(construction.deterministic, (bool, np.bool_)):
-            raise TypeError("ConstructionPolicy.deterministic must be Boolean")
 
         if self._editing.default_repair not in ("strict_local", "expand", "global"):
             raise ValueError("EditingPolicy.default_repair is invalid")
@@ -222,9 +199,6 @@ class PHBSpline(PHSpline):
             isinstance(self._editing.max_patch_spans, (bool, np.bool_))
             or not isinstance(self._editing.max_patch_spans, (int, np.integer))
             or self._editing.max_patch_spans < 1
-            or isinstance(self._editing.leaf_capacity, (bool, np.bool_))
-            or not isinstance(self._editing.leaf_capacity, (int, np.integer))
-            or self._editing.leaf_capacity < 2
             or (
                 self._editing.initial_patch_spans is not None
                 and (
@@ -235,10 +209,6 @@ class PHBSpline(PHSpline):
                     or self._editing.initial_patch_spans < 1
                 )
             )
-            or not isinstance(self._editing.expansion_factor, numbers.Real)
-            or not math.isfinite(float(self._editing.expansion_factor))
-            or self._editing.expansion_factor <= 1.0
-            or not isinstance(self._editing.preserve_outside_bitwise, (bool, np.bool_))
         ):
             raise ValueError("EditingPolicy patch limits must be positive")
         inverse_integers = (
@@ -262,10 +232,7 @@ class PHBSpline(PHSpline):
             and not isinstance(threshold, (bool, np.bool_))
             and math.isfinite(float(threshold))
             and 0.0 <= threshold <= 1.0
-            and self._inverse.seed_kind in ("monotone_cubic", "linear")
-            and self._inverse.fallback in ("itp", "bisection")
             and isinstance(self._inverse.lut_power_of_two, (bool, np.bool_))
-            and isinstance(self._inverse.use_halley, (bool, np.bool_))
         ):
             raise ValueError("InversePolicy contains inconsistent limits")
         numerical_integers = (
@@ -277,14 +244,10 @@ class PHBSpline(PHSpline):
         numerical_reals = (
             self._numerics.regularity_ratio_min,
             self._numerics.position_eps_factor,
-            self._numerics.tangent_abs_tol,
-            self._numerics.curvature_rel_tol,
             self._numerics.continuity_eps_factor,
-            self._numerics.inverse_eps_factor,
         )
         if not (
-            self._numerics.dtype == "float64"
-            and all(
+            all(
                 not isinstance(value, (bool, np.bool_))
                 and isinstance(value, (int, np.integer))
                 for value in numerical_integers
@@ -302,12 +265,7 @@ class PHBSpline(PHSpline):
             and self._numerics.max_regularization_subdivision_depth >= 0
             and self._numerics.parameter_ulp_slack >= 0
             and self._numerics.position_eps_factor > 0.0
-            and self._numerics.tangent_abs_tol > 0.0
-            and self._numerics.curvature_rel_tol > 0.0
             and self._numerics.continuity_eps_factor > 0.0
-            and self._numerics.inverse_eps_factor > 0.0
-            and self._numerics.use_longdouble_verification
-            in ("auto", "never", "always")
             and isinstance(
                 self._numerics.reject_unresolved_global_lengths, (bool, np.bool_)
             )
@@ -630,27 +588,13 @@ class PHBSpline(PHSpline):
         result = self._scale * self._parameter_total * product.real
         if result[0] <= 0.0 or not np.all(np.isfinite(result)):
             raise NumericalPrecisionError(
-                "Arc-length derivative recurrence lost positive speed",
+                "Curvature-vector recurrence lost positive speed",
                 span_id=span,
                 quantity="speed jet",
                 value=result.tolist(),
                 bound="finite with positive constant term",
             )
         return result
-
-    def _arc_derivative_jet_on_span(
-        self, span: int, local: float, order: int
-    ) -> tuple[complex, ...]:
-        field = self._position_series(span, local, order)
-        speed = self._speed_series(span, local, order)
-        result = [complex(field[0])]
-        for _ in range(order):
-            derivative = _series_derivative(field)
-            reciprocal = _series_reciprocal(speed[: derivative.size])
-            field = _series_product(derivative, reciprocal, derivative.size)
-            speed = speed[: field.size]
-            result.append(complex(field[0]))
-        return tuple(result)
 
     def _join_query(
         self,
@@ -693,7 +637,6 @@ class PHBSpline(PHSpline):
         u: numbers.Real,
         order: int = 1,
         *,
-        wrt: Literal["parameter", "arc_length"] = "parameter",
         side: Literal["auto", "left", "right"] = "auto",
     ) -> NDArray[np.float64]:
         value = self._validate_u(u)
@@ -701,24 +644,13 @@ class PHBSpline(PHSpline):
         selected_side = self._validate_join_side(side)
         if derivative_order == 0:
             return self.point(value)
-        if wrt == "parameter":
-            result = self._join_query(
-                value,
-                selected_side,
-                lambda span, local: self._parameter_derivative_on_span(
-                    span, local, derivative_order
-                ),
-            )
-        elif wrt == "arc_length":
-            result = self._join_query(
-                value,
-                selected_side,
-                lambda span, local: self._arc_derivative_jet_on_span(
-                    span, local, derivative_order
-                )[-1],
-            )
-        else:
-            raise ValueError("wrt must be 'parameter' or 'arc_length'")
+        result = self._join_query(
+            value,
+            selected_side,
+            lambda span, local: self._parameter_derivative_on_span(
+                span, local, derivative_order
+            ),
+        )
         return self._vector(result)
 
     def jet(
@@ -726,37 +658,21 @@ class PHBSpline(PHSpline):
         u: numbers.Real,
         order: int,
         *,
-        wrt: Literal["parameter", "arc_length"] = "parameter",
         side: Literal["auto", "left", "right"] = "auto",
     ) -> tuple[NDArray[np.float64], ...]:
         value = self._validate_u(u)
         maximum = _validate_order(order, self._numerics.max_evaluation_order)
         selected_side = self._validate_join_side(side)
-        if wrt == "parameter":
-            join = self._join_index(value)
-            if selected_side == "auto" and join is not None:
-                return tuple(
-                    self.derivative(value, j, wrt=wrt, side=selected_side)
-                    for j in range(maximum + 1)
-                )
-            span, local = self._locate(value, selected_side)
-            return tuple(
-                self._vector(self._parameter_derivative_on_span(span, local, j))
-                for j in range(maximum + 1)
-            )
-        if wrt != "arc_length":
-            raise ValueError("wrt must be 'parameter' or 'arc_length'")
         join = self._join_index(value)
         if selected_side == "auto" and join is not None:
-            # Validate each order because continuity can stop inside a jet.
             return tuple(
-                self.derivative(value, j, wrt=wrt, side=selected_side)
+                self.derivative(value, j, side=selected_side)
                 for j in range(maximum + 1)
             )
         span, local = self._locate(value, selected_side)
         return tuple(
-            self._vector(item)
-            for item in self._arc_derivative_jet_on_span(span, local, maximum)
+            self._vector(self._parameter_derivative_on_span(span, local, j))
+            for j in range(maximum + 1)
         )
 
     def tangent(self, u: numbers.Real) -> NDArray[np.float64]:
@@ -804,7 +720,6 @@ class PHBSpline(PHSpline):
         u: numbers.Real,
         order: int = 1,
         *,
-        wrt: Literal["arc_length", "parameter"] = "arc_length",
         side: Literal["auto", "left", "right"] = "auto",
     ) -> float:
         value = self._validate_u(u)
@@ -813,23 +728,9 @@ class PHBSpline(PHSpline):
 
         def evaluate(span: int, local: float) -> float:
             series = self._curvature_series(span, local, derivative_order)
-            if wrt == "parameter":
-                return float(
-                    math.factorial(derivative_order) * series[derivative_order]
-                )
-            if wrt != "arc_length":
-                raise ValueError("wrt must be 'parameter' or 'arc_length'")
-            speed = self._speed_series(span, local, derivative_order)
-            field = series
-            for _ in range(derivative_order):
-                derivative = _series_derivative(field)
-                field = _series_product(
-                    derivative,
-                    _series_reciprocal(speed[: derivative.size]),
-                    derivative.size,
-                )
-                speed = speed[: field.size]
-            return float(field[0])
+            return float(
+                math.factorial(derivative_order) * series[derivative_order]
+            )
 
         return float(self._join_query(value, selected_side, evaluate))
 
@@ -854,23 +755,11 @@ class PHBSpline(PHSpline):
         u: numbers.Real,
         order: int = 0,
         *,
-        wrt: Literal["arc_length", "parameter"] = "arc_length",
         side: Literal["auto", "left", "right"] = "auto",
     ) -> NDArray[np.float64]:
         value = self._validate_u(u)
         derivative_order = _validate_order(order, self._numerics.max_evaluation_order)
         selected_side = self._validate_join_side(side)
-        if wrt == "arc_length":
-            result = self._join_query(
-                value,
-                selected_side,
-                lambda span, local: self._arc_derivative_jet_on_span(
-                    span, local, derivative_order + 2
-                )[-1],
-            )
-            return self._vector(result)
-        if wrt != "parameter":
-            raise ValueError("wrt must be 'parameter' or 'arc_length'")
         result = self._join_query(
             value,
             selected_side,
@@ -885,30 +774,15 @@ class PHBSpline(PHSpline):
         u: numbers.Real,
         order: int,
         *,
-        wrt: Literal["arc_length", "parameter"] = "arc_length",
         side: Literal["auto", "left", "right"] = "auto",
     ) -> tuple[NDArray[np.float64], ...]:
         maximum = _validate_order(order, self._numerics.max_evaluation_order)
-        if wrt == "arc_length":
-            value = self._validate_u(u)
-            selected_side = self._validate_join_side(side)
-            join = self._join_index(value)
-            if selected_side == "auto" and join is not None:
-                return tuple(
-                    self.curvature_vector(value, j, wrt=wrt, side=selected_side)
-                    for j in range(maximum + 1)
-                )
-            span, local = self._locate(value, selected_side)
-            curve_jet = self._arc_derivative_jet_on_span(span, local, maximum + 2)
-            return tuple(self._vector(item) for item in curve_jet[2:])
-        if wrt != "parameter":
-            raise ValueError("wrt must be 'arc_length' or 'parameter'")
         value = self._validate_u(u)
         selected_side = self._validate_join_side(side)
         join = self._join_index(value)
         if selected_side == "auto" and join is not None:
             return tuple(
-                self.curvature_vector(value, j, wrt=wrt, side=selected_side)
+                self.curvature_vector(value, j, side=selected_side)
                 for j in range(maximum + 1)
             )
         span, local = self._locate(value, selected_side)
@@ -1134,16 +1008,13 @@ class PHBSpline(PHSpline):
         u: ArrayLike,
         order: int = 1,
         *,
-        wrt: Literal["parameter", "arc_length"] = "parameter",
         side: Literal["auto", "left", "right"] = "auto",
         out: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         values = self._prepare_batch(u, "u")
         result = np.empty(values.shape + (2,), dtype=np.float64)
         for index in np.ndindex(values.shape):
-            result[index] = self.derivative(
-                float(values[index]), order, wrt=wrt, side=side
-            )
+            result[index] = self.derivative(float(values[index]), order, side=side)
         return self._finish_batch(result, out)
 
     def curvature_vectors_at(
@@ -1151,7 +1022,6 @@ class PHBSpline(PHSpline):
         u: ArrayLike,
         order: int = 0,
         *,
-        wrt: Literal["arc_length", "parameter"] = "arc_length",
         side: Literal["auto", "left", "right"] = "auto",
         out: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
@@ -1159,7 +1029,7 @@ class PHBSpline(PHSpline):
         result = np.empty(values.shape + (2,), dtype=np.float64)
         for index in np.ndindex(values.shape):
             result[index] = self.curvature_vector(
-                float(values[index]), order, wrt=wrt, side=side
+                float(values[index]), order, side=side
             )
         return self._finish_batch(result, out)
 
@@ -1432,9 +1302,7 @@ class PHBSpline(PHSpline):
     def edit(self, *, repair: EditRepair | None = None) -> PHBSplineEditTransaction:
         return PHBSplineEditTransaction(self, self._validate_repair(repair))
 
-    def snapshot(self, *, compact: bool = False) -> PHBSplineSnapshot:
-        if not isinstance(compact, (bool, np.bool_)):
-            raise TypeError("compact must be a Boolean")
+    def snapshot(self) -> PHBSplineSnapshot:
         return PHBSplineSnapshot(self)
 
 

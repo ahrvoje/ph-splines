@@ -134,21 +134,23 @@ def main() -> None:
         count += 1
 
         curve = PHBSplineOpen(open_points(case), g_order=max(order, 4))
-        derivative_order = 1 + case % 4
+        derivative_order = 1 + case % 2
         us = np.linspace(0.08, 0.92, 15)
         vectors = normalized_vectors(
             curve,
             us,
-            lambda u, n=derivative_order, c=curve: c.derivative(u, n, wrt="arc_length"),
+            lambda u, n=derivative_order, c=curve: (
+                c.tangent(u) if n == 1 else c.curvature_vector(u)
+            ),
         )
         render_curve(
             curve,
             output(7, case, "arc_derivative_jets"),
-            f"arc-length derivative order {derivative_order}",
+            "unit tangent" if derivative_order == 1 else "curvature vector",
             (
                 "centripetal-force vector: the G8 unit-speed second derivative"
                 if case == 9
-                else "one shared Taylor-series recurrence"
+                else "unit tangent or curvature vector"
             ),
             vectors=vectors,
         )

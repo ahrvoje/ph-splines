@@ -25,17 +25,8 @@ class ConstructionPolicy:
     """Deterministic PH B-spline construction controls."""
 
     parameterization: Literal["centripetal", "chord", "uniform"] = "centripetal"
-    shape_objective: Literal["preimage_strain", "guide_fairness"] = "preimage_strain"
     max_iterations: int = 48
     max_line_search_steps: int = 16
-    max_hidden_spans_per_input_span: int = 8
-    max_refinement_rounds: int = 6
-    initial_trust_radius: float = 0.25
-    interpolation_weight: float = 1.0
-    guide_weight: float = 1.0
-    strain_weight: float = 1.0e-3
-    speed_variation_weight: float = 1.0e-4
-    deterministic: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,9 +36,6 @@ class EditingPolicy:
     default_repair: EditRepair = "strict_local"
     initial_patch_spans: int | None = None
     max_patch_spans: int = 64
-    expansion_factor: float = 2.0
-    leaf_capacity: int = 128
-    preserve_outside_bitwise: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,11 +45,8 @@ class InversePolicy:
     lut_nodes_min: int = 8
     lut_nodes_max: int = 128
     lut_power_of_two: bool = True
-    seed_kind: Literal["monotone_cubic", "linear"] = "monotone_cubic"
     fast_iterations: int = 2
     max_iterations: int = 67
-    use_halley: bool = True
-    fallback: Literal["itp", "bisection"] = "itp"
     endpoint_reverse_threshold: float = 0.5
 
 
@@ -69,18 +54,13 @@ class InversePolicy:
 class NumericalPolicy:
     """Binary64 resource limits and scale-aware numerical tolerances."""
 
-    dtype: Literal["float64"] = "float64"
     regularity_ratio_min: float = 1.0e-12
     max_preimage_degree: int = 16
     max_evaluation_order: int = 64
     max_regularization_subdivision_depth: int = 24
     parameter_ulp_slack: int = 4
     position_eps_factor: float = 256.0
-    tangent_abs_tol: float = 1.0e-12
-    curvature_rel_tol: float = 1.0e-10
     continuity_eps_factor: float = 1024.0
-    inverse_eps_factor: float = 64.0
-    use_longdouble_verification: Literal["auto", "never", "always"] = "auto"
     reject_unresolved_global_lengths: bool = True
 
 

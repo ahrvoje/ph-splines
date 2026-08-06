@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 
 import numpy as np
@@ -10,6 +11,22 @@ import pytest
 from ph_spline import DiscontinuousDerivativeError, PHBSplineClosed, PHBSplineOpen
 
 POINTS = np.array([[0.0, 0.0], [1.0, 0.4], [2.0, -0.7], [3.0, 1.1], [2.2, 2.0]])
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_construction_is_bitwise_deterministic(closed):
+    points = POINTS if not closed else np.vstack((POINTS, [[0.3, 1.5]]))
+    spline_type = PHBSplineClosed if closed else PHBSplineOpen
+    first = spline_type(points)
+    second = spline_type(points)
+    assert np.array_equal(first._span_knots, second._span_knots)
+    assert np.array_equal(first._prefix_normalized, second._prefix_normalized)
+    assert len(first._spans) == len(second._spans)
+    for left, right in zip(first._spans, second._spans):
+        assert np.array_equal(left.preimage, right.preimage)
+        assert np.array_equal(left.position, right.position)
+        assert np.array_equal(left.speed, right.speed)
+        assert np.array_equal(left.arc, right.arc)
 
 
 @pytest.mark.parametrize("order", [2, 3, 4, 6, 8])
@@ -64,10 +81,11 @@ def test_parameter_first_derivative_matches_centered_difference(u):
 
 
 @pytest.mark.parametrize("u", [0.11, 0.37, 0.83])
-def test_intrinsic_derivative_and_curvature_identities(u):
+def test_parameter_derivative_and_curvature_identities(u):
     curve = PHBSplineOpen(POINTS, c_order=4)
+    velocity = curve.derivative(u)
     assert np.allclose(
-        curve.derivative(u, 1, wrt="arc_length"), curve.tangent(u), atol=2e-13
+        velocity / np.linalg.norm(velocity), curve.tangent(u), atol=2e-13
     )
     curvature_vector = curve.curvature_vector(u)
     assert np.allclose(
@@ -76,24 +94,46 @@ def test_intrinsic_derivative_and_curvature_identities(u):
         rtol=2e-11,
         atol=2e-11,
     )
-    assert np.array_equal(curvature_vector, curve.derivative(u, 2, wrt="arc_length"))
-    for order in range(4):
-        assert np.array_equal(
-            curve.curvature_vector(u, order),
-            curve.derivative(u, order + 2, wrt="arc_length"),
-        )
+    h = 1.0e-6
+    curvature_vector_difference = (
+        curve.curvature_vector(u + h) - curve.curvature_vector(u - h)
+    ) / (2.0 * h)
+    assert np.allclose(
+        curve.curvature_vector(u, 1),
+        curvature_vector_difference,
+        rtol=2e-7,
+        atol=2e-7,
+    )
+    curvature_difference = (
+        curve.signed_curvature(u + h) - curve.signed_curvature(u - h)
+    ) / (2.0 * h)
+    assert curve.curvature_derivative(u) == pytest.approx(
+        curvature_difference, rel=2e-7, abs=2e-7
+    )
 
 
 def test_full_jets_match_single_order_methods():
     curve = PHBSplineOpen(POINTS, c_order=6)
-    for wrt in ("parameter", "arc_length"):
-        jet = curve.jet(0.37, 6, wrt=wrt)
-        assert len(jet) == 7
-        for order, value in enumerate(jet):
-            assert np.array_equal(value, curve.derivative(0.37, order, wrt=wrt))
+    jet = curve.jet(0.37, 6)
+    assert len(jet) == 7
+    for order, value in enumerate(jet):
+        assert np.array_equal(value, curve.derivative(0.37, order))
     vector_jet = curve.curvature_vector_jet(0.37, 4)
     for order, value in enumerate(vector_jet):
         assert np.array_equal(value, curve.curvature_vector(0.37, order))
+
+
+def test_derivative_api_has_one_parameter_domain():
+    for method in (
+        PHBSplineOpen.derivative,
+        PHBSplineOpen.jet,
+        PHBSplineOpen.curvature_derivative,
+        PHBSplineOpen.curvature_vector,
+        PHBSplineOpen.curvature_vector_jet,
+        PHBSplineOpen.derivatives_at,
+        PHBSplineOpen.curvature_vectors_at,
+    ):
+        assert "wrt" not in inspect.signature(method).parameters
 
 
 def test_parameter_derivatives_above_curve_degree_are_exact_zero():

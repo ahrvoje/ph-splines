@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
 import math
 
 import numpy as np
@@ -119,11 +120,8 @@ def test_invalid_inverse_policy_rejected():
     "keyword, policy",
     [
         ("construction", ConstructionPolicy(parameterization="bad")),
-        ("construction", ConstructionPolicy(shape_objective="bad")),
-        ("construction", ConstructionPolicy(initial_trust_radius=math.nan)),
+        ("construction", ConstructionPolicy(max_iterations=-1)),
         ("editing", EditingPolicy(initial_patch_spans=0)),
-        ("editing", EditingPolicy(expansion_factor=math.inf)),
-        ("inverse", InversePolicy(seed_kind="bad")),
         ("inverse", InversePolicy(endpoint_reverse_threshold=math.nan)),
         ("numerics", NumericalPolicy(position_eps_factor=math.nan)),
         ("numerics", NumericalPolicy(parameter_ulp_slack=-1)),
@@ -132,6 +130,43 @@ def test_invalid_inverse_policy_rejected():
 def test_every_policy_family_rejects_ill_defined_fields(keyword, policy):
     with pytest.raises(ValueError):
         PHBSplineOpen(POINTS, **{keyword: policy})
+
+
+def test_policy_api_contains_only_active_fields():
+    assert tuple(field.name for field in fields(ConstructionPolicy)) == (
+        "parameterization",
+        "max_iterations",
+        "max_line_search_steps",
+    )
+    assert tuple(field.name for field in fields(EditingPolicy)) == (
+        "default_repair",
+        "initial_patch_spans",
+        "max_patch_spans",
+    )
+    assert tuple(field.name for field in fields(InversePolicy)) == (
+        "lut_nodes_min",
+        "lut_nodes_max",
+        "lut_power_of_two",
+        "fast_iterations",
+        "max_iterations",
+        "endpoint_reverse_threshold",
+    )
+    assert tuple(field.name for field in fields(NumericalPolicy)) == (
+        "regularity_ratio_min",
+        "max_preimage_degree",
+        "max_evaluation_order",
+        "max_regularization_subdivision_depth",
+        "parameter_ulp_slack",
+        "position_eps_factor",
+        "continuity_eps_factor",
+        "reject_unresolved_global_lengths",
+    )
+
+
+def test_snapshot_has_no_inactive_compact_argument():
+    curve = PHBSplineOpen(POINTS)
+    with pytest.raises(TypeError):
+        curve.snapshot(compact=True)
 
 
 @pytest.fixture(scope="module")

@@ -1,6 +1,13 @@
 # PH Splines
 
-The provided Pythagorean-hodograph (PH) spline objects feature highly efficient, accurate and robust random-distance access through the `point_at_length` API.
+This Python package provides planar Pythagorean-hodograph (PH) splines (Farouki
+and Sakkalis, 1990 [[1]](#ref-1); Albrecht and Farouki, 1996 [[4]](#ref-4)) in
+cubic (Jaklič et al., 2010 [[5]](#ref-5)) and B-spline (Albrecht et al., 2017
+[[8]](#ref-8)) forms, centered on
+distance-based evaluation through the `point_at_length` API. Their defining PH
+property makes speed polynomial, so arc length is an exactly evaluable
+piecewise-polynomial function of the spline parameter, making distance queries
+convenient, efficient and robust without demanding numerical quadrature.
 
 - Cubic PH Spline (`CubicPHSplineOpen`, `CubicPHSplineClosed`) is highly efficient for static use cases.
 - PH B-spline (`PHBSplineOpen`, `PHBSplineClosed`) supports dynamic editing (moving, adding and deleting nodes) with prescribed continuity-order constraints.
@@ -93,13 +100,24 @@ This implementation joins planar cubic PH Bézier segments with complex form
 cubic; distance inversion is one monotone cubic solve, expressible with cube
 roots or hyperbolic functions. Bounded Newton iterations only correct rounding.
 
-### Numerical design highlights
+### Design details
 
-- All construction in normalized coordinates (origin `P0`, scale = longest
-  chord); hypot-based norms; chord-ratio representability guard.
-- Closed-form, bitwise-deterministic nonconvex preprocessing. Auxiliary points
-  are clamped to chord fractions `[1/16, 15/16]`; their prescribed tangents are
-  never boundary-clamped, and every fallback retains a strictly positive tilt.
+- Construction is deterministic: starts, branches, auxiliary fallbacks and
+  ties are fixed. Identical binary64 input produces identical coefficients in
+  the same package/dependency version and execution architecture.
+- Regular cubic PH curvature cannot change sign, so a G² spline without
+  auxiliary points is a convex curved run or a straight run. This is the
+  setting of [Jaklič et al.'s cubic PH G² construction](https://users.fmf.uni-lj.si/knez/clanki/CubicPHG2Spline-rev.pdf).
+- At each polygon inflection, the paper's Section 6 construction inserts a
+  chord point and tangent from the local four-point cubic. This implementation
+  fixes its open choices—chord-length parametrization, a `[1/16, 15/16]`
+  clamp, and a deterministic midpoint fallback—giving a G¹ sign-change joint
+  between G² convex runs.
+- Open endpoint tangents use the deterministic local-circumcircle convention.
+  A closed cycle has no independently chosen boundary tangents: its cyclic
+  solve, after any auxiliary partition, uses fixed start and branch ordering
+  to select one reproducible accepted root, even if several isolated roots
+  exist mathematically.
 - Bounded trust-region tridiagonal solve for the internal tangent angles,
   with machine-precision complex-step Jacobians (three-coloring), a
   deterministic fallback initializer for extreme chord ratios, and a damped,
@@ -116,20 +134,6 @@ roots or hyperbolic functions. Bounded Newton iterations only correct rounding.
 - Works verified from coordinate magnitudes `1e-150` to `1e307`, curvatures
   `1e-12` to `1e12`, chord ratios down to ~`5e-13`, and systems beyond 1000
   segments (sparse banded path).
-
-### API overview
-
-`CubicPHSplineOpen(points)` and `CubicPHSplineClosed(points)` are the
-immutable concrete classes; `CubicPHSpline` is their abstract family base.
-Both expose point, frame, curvature and exact distance-domain queries, including
-`point_at_length`. The closed class lists its seam point once and verifies the
-cyclic seam independently. `aux_inflection_points` reports any inserted
-curvature-sign transitions.
-
-All package exceptions derive from `PHSplineError`.
-`CubicPHSplineError` and `PHBSplineError` are sibling family roots; input
-failures are also `ValueError` instances and numerical failures are also
-`RuntimeError` instances.
 
 ### Benchmarks
 
@@ -178,7 +182,7 @@ midpoint = curve.point_at_length(0.5 * curve.length)
 
 # Derivatives are full vectors of arbitrary configured order.
 velocity = curve.derivative(0.4)
-intrinsic_jet = curve.jet(0.4, 6, wrt="arc_length")
+parameter_jet = curve.jet(0.4, 6)
 curvature_jet = curve.curvature_vector_jet(0.4, 4)
 
 # Handles survive insertion and index shifts; edits commit atomically.
@@ -192,11 +196,24 @@ with curve.edit() as edit:
     edit.move_point(handle, [2.0, -0.8])
     edit.insert_point(3, [2.5, 0.2])
 
-snapshot = curve.snapshot(compact=True)  # immutable query-only view
+snapshot = curve.snapshot()  # immutable query-only view
 stations = snapshot.points_at_length(
     np.linspace(0.0, snapshot.length, 1000), assume_sorted=True
 )
 ```
+
+### Gallery
+
+The isolated [`examples/bspline`](examples/bspline) directory contains
+generators and rendered output for all 224 referenced input cases, plus 128 PH
+B-spline-specific cases in eight feature families.
+
+| | |
+|---|---|
+| ![Closed G8 radial zigzag star](examples/bspline/pathological/14_star_zigzag_radial.png) | ![Closed distance stations](examples/bspline/features/02_closed_distance_stations/005_closed_distance_stations.png) |
+| *A closed, symmetric radial zigzag star built from degree-17 G8 PH spans.* | *A closed curve with equal arc-length stations.* |
+| ![Local move example](examples/bspline/features/03_local_move/009_local_move.png) | ![G8 centripetal-force example](examples/bspline/features/07_arc_derivative_jets/010_arc_derivative_jets.png) |
+| *A handle-based G2 move recompiles ten local spans.* | *The G8 curvature vector: the centripetal-force vector.* |
 
 ### Editing and higher-order geometry
 
@@ -209,57 +226,32 @@ configured patch, while `repair="global"` makes full reconstruction explicit.
 Failed edits leave points, handles, spans, version and cached metric data
 unchanged.
 
-`derivative(u, order, wrt=...)` evaluates parameter or intrinsic arc-length
-derivatives. `curvature_vector(u, order)` returns derivatives of the complete
-curvature vector—not only derivatives of scalar curvature—and
+`derivative(u, order)` evaluates derivatives with respect to the normalized
+spline parameter `u`. `curvature_vector(u, order)` returns parameter
+derivatives of the complete curvature vector—not only derivatives of scalar curvature—and
 `curvature_vector_jet` shares one Taylor-series recurrence. The elementary
 Bernstein/preimage product identities are used directly; finite-difference
 geometry and numerical quadrature are absent from these kernels.
 
-### API overview
+### Design details
 
-`PHBSplineOpen(points, ...)` and `PHBSplineClosed(points, ...)` are the
-mutable concrete classes; `PHBSpline` is their abstract family base. Optional
-continuity keywords request G, C or arc-length-curvature continuity, with G² as
-the default.
-
-The family provides scalar and batch geometry, arbitrary-order parameter and
-arc-length derivative jets, curvature-vector jets, analytic distance queries,
-stable point handles, atomic move/insert/delete operations, edit transactions
-and immutable snapshots. Construction and edits publish state only after
-interpolation, continuity, regularity and metric verification succeed.
-
-### PH B-spline gallery
-
-The isolated [`examples/bspline`](examples/bspline) directory contains
-generators and rendered output for all 224 referenced input cases, plus 128 PH
-B-spline-specific cases in eight feature families.
-
-| | |
-|---|---|
-| ![Closed G8 radial zigzag star](examples/bspline/pathological/14_star_zigzag_radial.png) | ![Closed distance stations](examples/bspline/features/02_closed_distance_stations/005_closed_distance_stations.png) |
-| *A closed, symmetric radial zigzag star built from degree-17 G8 PH spans.* | *A closed curve with equal arc-length stations.* |
-| ![Local move example](examples/bspline/features/03_local_move/009_local_move.png) | ![G8 centripetal-force example](examples/bspline/features/07_arc_derivative_jets/010_arc_derivative_jets.png) |
-| *A handle-based G2 move recompiles ten local spans.* | *The G8 second arc-length derivative: the centripetal-force vector.* |
-
-### Numerical design
-
-- Construction uses a translated and scaled complex frame, a degree exactly
-  deduced from the continuity request, one simple midpoint knot per input
-  interval, analytic PH displacement constraints and an independent
-  post-build interpolation/continuity check.
-- Each immutable span stores one authoritative Bernstein preimage. Position,
-  speed and forward/reverse arc coefficients follow from finite Bernstein
-  products and antiderivatives.
-- Regularity is certified by recursively bounding the distance from the
-  origin to Bernstein control boxes; sampling is used only for branch ranking.
-- High-order join evaluation retains canonical endpoint preimage jets, which
-  avoids catastrophic cancellation in alternating Bernstein differences.
-- Arc inversion starts from a monotone per-span lookup bracket and applies
-  bounded safeguarded Newton correction. Only stable Bernstein evaluation can
-  satisfy the final near-binary64 forward residual gate.
-- Global construction or an edit either returns a finite, verified curve or a
-  structured `PHBSplineError`; continuity and degree are never downgraded.
+- Construction is deterministic minimum-norm projection from a parameterized
+  secant guide. Open root signs are chosen consecutively; closed signs and seam
+  lift use a fixed two-state search. No strain, elastica, length or curvature
+  objective is applied.
+- The requested continuity fixes the minimum preimage degree, and one midpoint
+  knot per input interval supplies shape freedom. The complex preimage model
+  follows [Albrecht et al.'s PH B-spline construction](https://arxiv.org/abs/1609.07888);
+  the degree and knot rules are implementation conventions.
+- Analytic displacement constraints produce one authoritative Bernstein
+  preimage per span; position, polynomial speed and exact arc length follow by
+  finite products and antiderivatives.
+- Recursive Bernstein-box bounds certify regularity, while canonical endpoint
+  preimage jets stabilize high-order join evaluation.
+- Arc inversion uses a monotone span lookup, a linear bracket seed and bounded
+  safeguarded Newton/bisection with a final forward-residual check.
+- Construction and edits publish only finite, verified curves; requested
+  continuity and degree are never silently downgraded.
 
 ### Benchmarks: size and shape
 
@@ -323,16 +315,154 @@ recompilation as total-size-independent execution.
 
 ## References
 
-- Jaklič, Kozak, Krajnc, Vitrih and Žagar, [*On interpolation by planar cubic
-  G² Pythagorean-hodograph spline curves*](https://users.fmf.uni-lj.si/knez/clanki/CubicPHG2Spline-rev.pdf).
-- Albrecht, Beccari, Canonne and Romani, [*Pythagorean-Hodograph B-Spline
-  Curves* (PDF)](https://arxiv.org/pdf/1609.07888) and
-  [abstract/metadata](https://arxiv.org/abs/1609.07888).
-- Farouki, [*Arc lengths of rational Pythagorean-hodograph
-  curves*](https://escholarship.org/content/qt90s84043/qt90s84043.pdf).
-- Farouki and Sakkalis, [*Real rational curves are not ‘unit
-  speed’*](https://doi.org/10.1016/0167-8396(91)90040-I).
-- Knez, Pelosi and Sampoli, [*Construction of G² planar Hermite interpolants
-  with prescribed arc lengths*](https://arxiv.org/pdf/2202.11371).
-- Gajny, Béarée, Nyiri and Gibaru, [*Path planning with PH G² splines in
-  R²*](https://doi.org/10.1109/IConSCS.2012.6502455).
+1. <a id="ref-1"></a>Farouki, R. T., & Sakkalis, T. (1990). [Pythagorean
+   hodographs](https://doi.org/10.1147/rd.345.0736). *IBM Journal of Research
+   and Development*, *34*(5), 736–752.
+2. <a id="ref-2"></a>Farouki, R. T., & Sakkalis, T. (1991). [Real rational curves are not ‘unit
+   speed’](https://doi.org/10.1016/0167-8396(91)90040-I). *Computer Aided
+   Geometric Design*, *8*(2), 151–157.
+3. <a id="ref-3"></a>Farouki, R. T. (1992). [Pythagorean-hodograph curves in practical
+   use](https://doi.org/10.1137/1.9781611971668.ch1). In *Geometry Processing
+   for Design and Manufacturing* (pp. 3–33). SIAM.
+4. <a id="ref-4"></a>Albrecht, G., & Farouki, R. T. (1996). [Construction of C²
+   Pythagorean-hodograph interpolating splines by the homotopy
+   method](https://doi.org/10.1007/BF02124754). *Advances in Computational
+   Mathematics*, *5*, 417–442.
+5. <a id="ref-5"></a>Jaklič, G., Kozak, J., Krajnc, M., Vitrih, V., & Žagar, E. (2010). [On
+   interpolation by planar cubic G² Pythagorean-hodograph spline
+   curves](https://doi.org/10.1090/S0025-5718-09-02298-4). *Mathematics of
+   Computation*, *79*(269), 305–326.
+6. <a id="ref-6"></a>Gajny, L., Béarée, R., Nyiri, E., & Gibaru, O. (2012). [Path planning with
+   PH G² splines in R²](https://doi.org/10.1109/IConSCS.2012.6502455).
+   *Proceedings of the 1st International Conference on Systems and Computer
+   Science*. IEEE.
+7. <a id="ref-7"></a>Farouki, R. T. (2015). [Arc lengths of rational Pythagorean-hodograph
+   curves](https://doi.org/10.1016/j.cagd.2015.03.007). *Computer Aided
+   Geometric Design*, *34*, 1–4.
+8. <a id="ref-8"></a>Albrecht, G., Beccari, C. V., Canonne, J.-C., & Romani, L. (2017). [Planar
+   Pythagorean-Hodograph B-Spline
+   curves](https://doi.org/10.1016/j.cagd.2017.09.001). *Computer Aided
+   Geometric Design*, *57*, 57–77.
+9. <a id="ref-9"></a>Knez, M., Pelosi, F., & Sampoli, M. L. (2022). [Construction of G² planar
+   Hermite interpolants with prescribed arc
+   lengths](https://doi.org/10.1016/j.amc.2022.127092). *Applied Mathematics
+   and Computation*, *426*, 127092.
+
+## Appendix: API
+
+### Cubic PH spline
+
+<table width="100%">
+  <thead>
+    <tr>
+      <th width="62%">Signature or property</th>
+      <th width="38%">Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>CubicPHSplineOpen(points: PointSequence)</code></td><td>Construct an immutable open interpolant.</td></tr>
+    <tr><td><code>CubicPHSplineClosed(points: PointSequence)</code></td><td>Construct an immutable cyclic interpolant; list the seam point once.</td></tr>
+    <tr><td><code>.closed -&gt; bool</code></td><td>Whether the spline is cyclic.</td></tr>
+    <tr><td><code>.degree -&gt; int</code></td><td>Polynomial degree (<code>3</code>).</td></tr>
+    <tr><td><code>.num_points -&gt; int</code></td><td>Number of input points.</td></tr>
+    <tr><td><code>.length -&gt; float</code></td><td>Total arc length.</td></tr>
+    <tr><td><code>.aux_inflection_points -&gt; list[dict[str, float]]</code></td><td>Inserted inflections as <code>u</code>, <code>s</code>, <code>x</code>, <code>y</code> records.</td></tr>
+    <tr><td><code>point(u: Real) -&gt; NDArray</code></td><td>Position at normalized parameter <code>u</code>.</td></tr>
+    <tr><td><code>tangent(u: Real) -&gt; NDArray</code></td><td>Unit tangent.</td></tr>
+    <tr><td><code>normal(u: Real, side: Literal["left", "right"] = "left") -&gt; NDArray</code></td><td>Oriented unit normal.</td></tr>
+    <tr><td><code>principal_normal(u: Real) -&gt; NDArray</code></td><td>Unit normal toward the curvature center.</td></tr>
+    <tr><td><code>signed_curvature(u: Real) -&gt; float</code></td><td>Signed scalar curvature.</td></tr>
+    <tr><td><code>curvature_vector(u: Real) -&gt; NDArray</code></td><td>Curvature times the left normal.</td></tr>
+    <tr><td><code>arc_length(u: Real) -&gt; float</code></td><td>Length from <code>u=0</code> to <code>u</code>.</td></tr>
+    <tr><td><code>parameter_at_length(s: Real) -&gt; float</code></td><td>Parameter at travelled length <code>s</code>.</td></tr>
+    <tr><td><code>point_at_length(s: Real) -&gt; NDArray</code></td><td>Position at travelled length <code>s</code>.</td></tr>
+  </tbody>
+</table>
+
+### PH B-spline
+
+#### Construction and properties
+
+<table width="100%">
+  <thead>
+    <tr>
+      <th width="63%">Signature or property</th>
+      <th width="37%">Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>PHBSplineOpen(points: ArrayLike, *, g_order: Optional[int] = None, c_order: Optional[int] = None, curvature_order: Optional[int] = None)</code></td><td>Construct a mutable open interpolant.</td></tr>
+    <tr><td><code>PHBSplineClosed(points: ArrayLike, *, g_order: Optional[int] = None, c_order: Optional[int] = None, curvature_order: Optional[int] = None)</code></td><td>Construct a mutable cyclic interpolant.</td></tr>
+    <tr><td><code>.closed -&gt; bool</code></td><td>Whether the spline is cyclic.</td></tr>
+    <tr><td><code>.points -&gt; NDArray[np.float64]</code></td><td>Read-only copy of interpolation points.</td></tr>
+    <tr><td><code>.point_handles -&gt; tuple[PointHandle, ...]</code></td><td>Stable handles in current point order.</td></tr>
+    <tr><td><code>.num_points -&gt; int</code></td><td>Number of interpolation points.</td></tr>
+    <tr><td><code>.num_spans -&gt; int</code></td><td>Number of compiled polynomial spans.</td></tr>
+    <tr><td><code>.preimage_degree -&gt; int</code></td><td>Complex B-spline preimage degree.</td></tr>
+    <tr><td><code>.degree -&gt; int</code></td><td>PH curve degree.</td></tr>
+    <tr><td><code>.requested_continuity -&gt; ContinuitySpec</code></td><td>Requested G, C and curvature orders.</td></tr>
+    <tr><td><code>.verified_continuity -&gt; ContinuitySpec</code></td><td>Independently verified orders.</td></tr>
+    <tr><td><code>.length -&gt; float</code></td><td>Total arc length.</td></tr>
+    <tr><td><code>.length_coordinate -&gt; LengthCoordinate</code></td><td>Extended-form total length.</td></tr>
+    <tr><td><code>.version -&gt; int</code></td><td>State version incremented by each commit.</td></tr>
+    <tr><td><code>.diagnostics -&gt; BuildDiagnostics</code></td><td>Latest construction and verification metrics.</td></tr>
+    <tr><td><code>.last_edit_report -&gt; Optional[EditReport]</code></td><td>Most recent committed edit report.</td></tr>
+  </tbody>
+</table>
+
+#### Geometry and distance
+
+<table width="100%">
+  <thead>
+    <tr>
+      <th width="64%">Method signature</th>
+      <th width="36%">Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>point(u: Union[Real, CurveLocation]) -&gt; NDArray[np.float64]</code></td><td>Position by parameter or stable local location.</td></tr>
+    <tr><td><code>derivative(u: Real, order: int = 1, *, side: Literal["auto", "left", "right"] = "auto") -&gt; NDArray[np.float64]</code></td><td>Spline-parameter derivative of arbitrary order.</td></tr>
+    <tr><td><code>jet(u: Real, order: int, *, side: Literal["auto", "left", "right"] = "auto") -&gt; tuple[NDArray[np.float64], ...]</code></td><td>Parameter derivatives from order zero through <code>order</code>.</td></tr>
+    <tr><td><code>tangent(u: Real) -&gt; NDArray[np.float64]</code></td><td>Unit tangent.</td></tr>
+    <tr><td><code>normal(u: Real, side: Literal["left", "right"] = "left") -&gt; NDArray[np.float64]</code></td><td>Oriented unit normal.</td></tr>
+    <tr><td><code>principal_normal(u: Real) -&gt; NDArray[np.float64]</code></td><td>Unit normal toward the curvature center.</td></tr>
+    <tr><td><code>signed_curvature(u: Real) -&gt; float</code></td><td>Signed scalar curvature.</td></tr>
+    <tr><td><code>curvature_derivative(u: Real, order: int = 1, *, side: Literal["auto", "left", "right"] = "auto") -&gt; float</code></td><td>Parameter derivative of scalar curvature.</td></tr>
+    <tr><td><code>curvature_vector(u: Real, order: int = 0, *, side: Literal["auto", "left", "right"] = "auto") -&gt; NDArray[np.float64]</code></td><td>Curvature vector or its parameter derivative.</td></tr>
+    <tr><td><code>curvature_vector_jet(u: Real, order: int, *, side: Literal["auto", "left", "right"] = "auto") -&gt; tuple[NDArray[np.float64], ...]</code></td><td>Curvature-vector parameter derivatives through <code>order</code>.</td></tr>
+    <tr><td><code>arc_length(u: Real, *, extended: bool = False) -&gt; Union[float, LengthCoordinate]</code></td><td>Length from <code>u=0</code> to <code>u</code>.</td></tr>
+    <tr><td><code>distance_between(u0: Real, u1: Real, *, mode: Literal["absolute", "signed", "forward"] = "absolute") -&gt; float</code></td><td>Arc distance between parameters.</td></tr>
+    <tr><td><code>location_at_length(s: Union[Real, LengthCoordinate]) -&gt; CurveLocation</code></td><td>Stable local location at travelled length.</td></tr>
+    <tr><td><code>parameter_at_length(s: Union[Real, LengthCoordinate]) -&gt; float</code></td><td>Parameter at travelled length.</td></tr>
+    <tr><td><code>point_at_length(s: Union[Real, LengthCoordinate]) -&gt; NDArray[np.float64]</code></td><td>Position at travelled length.</td></tr>
+    <tr><td><code>frame_at_length(s: Union[Real, LengthCoordinate]) -&gt; Frame2D</code></td><td>Position, tangent, normal and curvature at length.</td></tr>
+    <tr><td><code>advance_by_length(location: CurveLocation, ds: Real) -&gt; CurveLocation</code></td><td>Advance a local location by signed distance.</td></tr>
+    <tr><td><code>point_after_length(location: CurveLocation, ds: Real) -&gt; NDArray[np.float64]</code></td><td>Position after signed travel from a location.</td></tr>
+  </tbody>
+</table>
+
+#### Editing and snapshots
+
+<table width="100%">
+  <thead>
+    <tr>
+      <th width="70%">Method signature or property</th>
+      <th width="30%">Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>point_handle(index: int) -&gt; PointHandle</code></td><td>Stable handle for a current index.</td></tr>
+    <tr><td><code>index_of(handle: PointHandle) -&gt; int</code></td><td>Current index of a live handle.</td></tr>
+    <tr><td><code>move_point(point: Union[int, PointHandle], value: ArrayLike, *, repair: Optional[EditRepair] = None) -&gt; EditReport</code></td><td>Atomically move one point.</td></tr>
+    <tr><td><code>insert_point(index: int, value: ArrayLike, *, repair: Optional[EditRepair] = None) -&gt; InsertResult</code></td><td>Atomically insert one point.</td></tr>
+    <tr><td><code>delete_point(point: Union[int, PointHandle], *, repair: Optional[EditRepair] = None) -&gt; EditReport</code></td><td>Atomically delete one point.</td></tr>
+    <tr><td><code>append_point(value: ArrayLike, *, repair: Optional[EditRepair] = None) -&gt; InsertResult</code></td><td>Append one point.</td></tr>
+    <tr><td><code>prepend_point(value: ArrayLike, *, repair: Optional[EditRepair] = None) -&gt; InsertResult</code></td><td>Prepend one point.</td></tr>
+    <tr><td><code>edit(*, repair: Optional[EditRepair] = None) -&gt; PHBSplineEditTransaction</code></td><td>Begin a one-commit edit context.</td></tr>
+    <tr><td><code>PHBSplineEditTransaction.move_point(point: Union[int, PointHandle], value: ArrayLike) -&gt; None</code></td><td>Stage a move.</td></tr>
+    <tr><td><code>PHBSplineEditTransaction.insert_point(index: int, value: ArrayLike) -&gt; PointHandle</code></td><td>Stage an insertion.</td></tr>
+    <tr><td><code>PHBSplineEditTransaction.delete_point(point: Union[int, PointHandle]) -&gt; None</code></td><td>Stage a deletion.</td></tr>
+    <tr><td><code>PHBSplineEditTransaction.report -&gt; EditReport</code></td><td>Commit report, available after successful context exit.</td></tr>
+    <tr><td><code>snapshot() -&gt; PHBSplineSnapshot</code></td><td>Immutable query-only view of the current version.</td></tr>
+  </tbody>
+</table>
