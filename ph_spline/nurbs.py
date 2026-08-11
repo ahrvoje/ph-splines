@@ -356,6 +356,47 @@ class NURBSHandle:
             f"{type(self).__name__} is immutable; cannot delete {name!r}"
         )
 
+    # -- copy and pickle protocols ----------------------------------------
+    #
+    # Handles are cached and shipped across process boundaries in ordinary
+    # applications.  Restoration bypasses ``__init__`` (and its proof
+    # token), so it rebuilds the private homogeneous array from the public
+    # arrays and re-runs the structural verification; a corrupted payload
+    # raises ``OffsetConstructionError`` instead of materializing an
+    # inconsistent handle.
+
+    def __getstate__(self) -> dict:
+        return {
+            name: getattr(self, name)
+            for name in NURBSHandle.__slots__
+            if name != "_homogeneous"
+        }
+
+    def __setstate__(self, state: dict) -> None:
+        object.__setattr__(self, "_frozen", False)
+        for name in ("_degree", "_num_spans", "_closed"):
+            object.__setattr__(self, name, state[name])
+        arrays = {}
+        for name in ("_knots", "_points", "_weights"):
+            value = np.asarray(state[name], dtype=np.float64)
+            value.setflags(write=False)
+            arrays[name] = value
+            object.__setattr__(self, name, value)
+        homogeneous = np.empty((arrays["_points"].shape[0], 3))
+        homogeneous[:, 0] = arrays["_weights"] * arrays["_points"][:, 0]
+        homogeneous[:, 1] = arrays["_weights"] * arrays["_points"][:, 1]
+        homogeneous[:, 2] = arrays["_weights"]
+        homogeneous.setflags(write=False)
+        object.__setattr__(self, "_homogeneous", homogeneous)
+        _verify_structure(
+            degree=self._degree,
+            knots=self._knots,
+            control_points=self._points,
+            weights=self._weights,
+            num_spans=self._num_spans,
+        )
+        object.__setattr__(self, "_frozen", True)
+
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(degree={self._degree}, "

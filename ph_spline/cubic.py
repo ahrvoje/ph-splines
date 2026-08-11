@@ -254,6 +254,44 @@ class CubicPHSpline(PHSpline):
             f"{type(self).__name__} is immutable; cannot delete {name!r}"
         )
 
+    # ------------------------------------------------------------------
+    # Copy and pickle protocols
+    # ------------------------------------------------------------------
+    #
+    # Immutability is a public-API contract, not a bar on ordinary Python
+    # object handling: pickling, ``copy`` and ``deepcopy`` (undo stacks,
+    # caches, multiprocessing) must work.  Restoration bypasses
+    # ``__init__``, so it re-freezes the arrays and re-runs the
+    # post-construction verifiers; a corrupted payload raises the same
+    # typed exceptions as a failed construction instead of materializing
+    # an unverified spline.
+
+    def __getstate__(self) -> dict:
+        return {name: getattr(self, name) for name in CubicPHSpline.__slots__}
+
+    def __setstate__(self, state: dict) -> None:
+        object.__setattr__(self, "_frozen", False)
+        for name in CubicPHSpline.__slots__:
+            if name == "_frozen":
+                continue
+            value = state[name]
+            if isinstance(value, np.ndarray):
+                value = np.asarray(value)
+                value.setflags(write=False)
+            object.__setattr__(self, name, value)
+        segments = list(self._segments)
+        self._verify_regularity(segments)
+        self._verify_admissibility(segments, list(self._segment_taus))
+        if self.closed:
+            self._verify_closed_continuity(
+                segments, list(self._joint_kinds), list(self._joint_tangents)
+            )
+        else:
+            self._verify_continuity(
+                segments, list(self._joint_kinds), list(self._joint_tangents)
+            )
+        object.__setattr__(self, "_frozen", True)
+
     def __repr__(self) -> str:
         kind = (
             "straight"
