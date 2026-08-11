@@ -66,8 +66,9 @@ $$
 \text{point interpolation}
 +G^2\text{ within convex sub-splines}\\
 {}+G^1\text{ at inserted inflection points and straight/curved transitions}\\
-{}+\text{regular cubic PH segments}
-+\text{elementary local arc-length inversion}.
+{}+\text{regular cubic PH segments}\\
+{}+\text{exact rational NURBS offsets}\\
+{}+\text{elementary local arc-length inversion}.
 \end{gathered}
 }
 $$
@@ -91,6 +92,9 @@ Accordingly, the constructor shall:
   self-intersections within a convex sub-polyline;
 - never downgrade continuity anywhere except at the documented $G^1$
   joints above;
+- expose on-demand construction of an exact rational NURBS representation of
+  every representable finite signed parallel offset, without sampling or
+  geometric fitting;
 - never return an approximate solution whose verified continuity
   mismatch exceeds the construction tolerances.
 
@@ -155,6 +159,8 @@ curve.curvature_vector(u)
 curve.arc_length(u)
 curve.parameter_at_length(s)
 curve.point_at_length(s)
+
+curve.offset(distance)
 ```
 
 ## 2.3 Return types
@@ -170,8 +176,56 @@ curve.point_at_length(s)
 | `arc_length` | Python `float` |
 | `parameter_at_length` | Python `float` |
 | `point_at_length` | NumPy `float64` array of shape `(2,)` |
+| `offset` | immutable `NURBSHandle` |
 
 All returned arrays shall be newly allocated or read-only. A caller must not be able to mutate the spline through a returned object.
+
+## 2.4 Read-only NURBS handle
+
+`curve.offset(distance)` SHALL return the same public `NURBSHandle` type for
+the cubic and PH B-spline families. The handle has only the following
+inspection and point-query interface:
+
+```python
+class NURBSHandle:
+    @property
+    def degree(self) -> int: ...
+
+    @property
+    def knots(self) -> NDArray[np.float64]: ...
+
+    @property
+    def control_points(self) -> NDArray[np.float64]: ...
+
+    @property
+    def weights(self) -> NDArray[np.float64]: ...
+
+    @property
+    def num_control_points(self) -> int: ...
+
+    @property
+    def num_spans(self) -> int: ...
+
+    @property
+    def domain(self) -> tuple[float, float]: ...
+
+    @property
+    def closed(self) -> bool: ...
+
+    def point(self, u: Real) -> NDArray[np.float64]: ...
+```
+
+The interface SHALL NOT expose mutation, editing, derivatives, arc-length
+queries, fitting controls, or a back-reference that can mutate the source
+spline. `domain` is exactly `(0.0, 1.0)`. `knots` has shape
+`(num_control_points + degree + 1,)`, `control_points` has shape
+`(num_control_points, 2)`, and `weights` has shape
+`(num_control_points,)`. All three arrays contain finite binary64 values and
+are returned as read-only snapshots. Every weight is strictly positive.
+
+The handle is a snapshot. It remains valid and unchanged even if the source
+is a mutable `PHBSpline` that is edited later. Section 11.7 defines the
+normative construction and evaluation rules.
 
 # 3. Public parameter convention
 
@@ -1287,6 +1341,207 @@ It is not a unit vector.
 
 For a straight spline, return the zero vector.
 
+## 11.7 Exact parallel offset as a NURBS
+
+### 11.7.1 Public operation and sign convention
+
+```python
+def offset(self, distance: Real) -> NURBSHandle: ...
+```
+
+`distance` is a finite signed length in user coordinates. Positive values use
+the left unit normal defined in Section 11.3 and negative values use the right
+unit normal. Therefore the required locus is
+
+$$
+\boxed{
+r_d(u)=r(u)+dN_L(u),\qquad 0\le u\le1.
+}
+$$
+
+This sign differs from references that define the positive normal as
+$(y',-x')/\lVert r'\rVert$. In particular, it is the negative of the normal
+used in Albrecht et al., Section 4.2. An implementation that follows that
+reference formula SHALL substitute $h=-d$.
+
+The argument rules of Section 15.1 apply. A Boolean, array, sequence, NaN, or
+infinity is invalid. Zero is valid and follows the same construction; it MUST
+NOT select an undocumented reduced-degree representation.
+
+### 11.7.2 Rational identity
+
+For a regular span, let
+
+$$
+v(t)=r'(t)=(x'(t),y'(t)),\qquad
+\sigma(t)=\lVert v(t)\rVert>0,
+$$
+
+and let $R_L(x,y)=(-y,x)$. The PH identity makes $\sigma$ polynomial, so
+
+$$
+r_d(t)
+=\frac{\sigma(t)r(t)+dR_L(v(t))}{\sigma(t)}
+$$
+
+is rational for every finite $d$. This exact rationality, which an ordinary
+polynomial spline does not generally have, is a defining production feature
+of this PH spline family. Sampling, interpolation, least-squares fitting, and
+generic approximate offset algorithms are forbidden.
+
+### 11.7.3 Homogeneous rational quintic controls
+
+Let one source cubic span have degree-3 Bezier controls
+$C_0,\ldots,C_3$ in its local parameter $t\in[0,1]$. Its derivative and speed
+have degree-2 Bernstein forms
+
+$$
+v(t)=\sum_{i=0}^{2}V_iB_i^2(t),
+\qquad V_i=3(C_{i+1}-C_i),
+$$
+
+$$
+\sigma(t)=\sum_{i=0}^{2}s_iB_i^2(t).
+$$
+
+The $s_i$ SHALL come from the stored PH speed polynomial and the $V_i$ SHALL
+be independently checked against the stored hodograph. Define $q=5$ and, for
+$k=0,\ldots,q$,
+
+$$
+\lambda_{i,j}^{(k)}
+=\frac{\binom{2}{i}\binom{3}{j}}{\binom{5}{k}},
+\qquad i+j=k.
+$$
+
+The homogeneous offset controls $O_k=(W_k,X_k,Y_k)$ are uniquely defined by
+
+$$
+\boxed{
+\begin{aligned}
+W_k
+&=\sum_{\substack{0\le i\le2\\0\le j\le3\\i+j=k}}
+\lambda_{i,j}^{(k)}s_i,\\
+(X_k,Y_k)
+&=\sum_{\substack{0\le i\le2\\0\le j\le3\\i+j=k}}
+\lambda_{i,j}^{(k)}
+\left(s_iC_j+dR_L(V_i)\right).
+\end{aligned}
+}
+$$
+
+The corresponding rational Bezier control point is
+$Q_k=(X_k/W_k,Y_k/W_k)$ with weight $W_k$. These are the degree-5 offset
+controls of Farouki, Section 17.5, written for this package's left-normal sign.
+The formula is a Bernstein product, not a fit.
+
+The formula is coordinate-system independent, but $C_j$, $V_i$, $s_i$, and
+$d$ SHALL use one common affine frame. The reference Python/NumPy profile
+performs the products in the normalized frame of Section 5 with
+$\widehat d=d/H$, converts each verified Euclidean rational control back to
+user coordinates, and leaves the dimensionless weights unchanged. Mixing a
+physical distance with normalized controls is nonconforming.
+
+### 11.7.4 Positive weights and canonical assembly
+
+A positive denominator polynomial can have a nonpositive Bernstein
+coefficient on a wide interval. The public handle nevertheless requires
+strictly positive weights for stable standard NURBS interchange. For each
+homogeneous quintic patch, let $\epsilon$ be the arithmetic unit roundoff and
+
+$$
+\gamma_n=\frac{n\epsilon}{1-n\epsilon},\qquad
+\tau_W=\gamma_{32(q+1)}\max_k|W_k|.
+$$
+
+The reference binary64 profile has $q=5$ and a maximum of 24 midpoint
+subdivision levels per source patch. The implementation SHALL:
+
+1. accept a leaf only when every $W_k>\tau_W$;
+2. if the test fails, subdivide all three homogeneous Bernstein coordinates
+   by de Casteljau at the exact local midpoint $1/2$;
+3. process the left child before the right child and repeat until every leaf
+   passes;
+4. raise `OffsetConstructionError` if the existing regularity bound cannot
+   certify termination by level 24.
+
+Regularity gives $\sigma(t)>0$, so exact arithmetic guarantees termination.
+Subdivision changes only the representation, not the rational curve.
+An implementation in another arithmetic MAY use a different fixed depth and
+a proved tighter rounding bound, but it SHALL document both and preserve the
+same accept-or-fail rule; it MUST NOT accept a weight whose sign is unresolved.
+
+The leaf patches SHALL then be concatenated in source traversal order. At a
+common endpoint, multiply every homogeneous control of the next patch by the
+one positive projective scale that makes the two endpoint triples equal.
+Verify the independently computed Euclidean endpoint before sharing it; a
+projective rescale MUST NOT hide a position or normal mismatch. After this
+step, omit the duplicate first control of every patch after the first.
+
+For $M$ final rational patches of degree $q=5$ with strictly increasing
+global breakpoints
+
+$$
+0=\xi_0<\xi_1<\cdots<\xi_M=1,
+$$
+
+the canonical clamped knot vector is
+
+$$
+\boxed{
+U=\{\xi_0^{[q+1]},
+\xi_1^{[q]},\ldots,\xi_{M-1}^{[q]},
+\xi_M^{[q+1]}\}.
+}
+$$
+
+Here $a^{[r]}$ means $r$ consecutive copies of $a$. The output has degree 5,
+$5M+1$ controls, and `num_spans == M`. Original source knots and any
+deterministic positivity-refinement knots appear at their exact normalized
+global parameters. No knot removal or degree reduction is permitted. This
+segmented form is the canonical repository representation, so the same
+source state and binary64 distance produce the same arrays.
+
+### 11.7.5 Evaluation and verification
+
+`NURBSHandle.point(u)` SHALL evaluate homogeneous controls
+$(W_kQ_{k,x},W_kQ_{k,y},W_k)$ by the standard de Boor algorithm and divide
+only once, after verifying a finite positive denominator. Its parameter is
+the source spline's unchanged normalized global parameter. Endpoint and knot
+selection follow Section 3.
+
+Before publication, independently verify:
+
+- the degree, control count, knot count, knot order, and endpoint
+  multiplicities;
+- finite controls and strictly positive weights;
+- the Bernstein coefficient identities for $\sigma r+dR_L(v)$ and $\sigma$;
+- every source and refinement breakpoint from both incident patches;
+- at deterministic interior oracle parameters,
+  $$
+  \operatorname{offset}(d).\operatorname{point}(u)
+  =r(u)+dN_L(u)
+  $$
+  within a degree- and scale-aware binary64 forward-error bound.
+
+Failure raises `OffsetConstructionError`; an approximate or partially
+verified handle is never returned.
+
+### 11.7.6 Cusps and self-intersections
+
+Differentiation with respect to source arc length gives
+
+$$
+\frac{dr_d}{ds}=(1-d\kappa)T.
+$$
+
+Thus the offset has a cusp where $1-d\kappa=0$ and can self-intersect for
+large $|d|$. These are properties of the exact parallel curve. Construction
+SHALL retain them and SHALL NOT reject, trim, smooth, or join them. They are
+not rational poles: the NURBS denominator is the strictly positive source
+speed and is independent of $d$. Trimming and cusp classification are outside
+the `NURBSHandle` interface.
+
 # 12. Exact local arc length
 
 For one segment,
@@ -1874,6 +2129,11 @@ $$
 0\le s\le L.
 $$
 
+For `distance`, every finite real value, including zero and negative values,
+is valid. It is not restricted by the local radius of curvature. A value that
+would make an offset coordinate or homogeneous coefficient nonrepresentable
+raises `OffsetConstructionError` instead of returning infinity.
+
 Values outside the domain produce an exception. Extrapolation is not supported.
 
 A value lying at most a small number of ulps outside an endpoint because of prior floating-point arithmetic may be clamped to that endpoint. Larger violations must not be clamped silently.
@@ -1925,7 +2185,8 @@ Shared value errors:
 
 Shared runtime errors:
     NonRegularSplineError, ArcLengthInversionError,
-    LengthResolutionError, NumericalPrecisionError
+    LengthResolutionError, NumericalPrecisionError,
+    OffsetConstructionError
 
 Cubic-only value errors:
     NonSimplePointDataError, ReversalError,
@@ -1945,6 +2206,9 @@ Every construction exception shall include:
 - the failed quantity;
 - the measured value;
 - the required bound.
+
+`OffsetConstructionError` SHALL additionally identify `operation="offset"`,
+the signed distance, and the positivity-refinement depth when applicable.
 
 Example diagnostic content:
 
@@ -1973,6 +2237,11 @@ The implementation shall not use:
   inflection points and straight/curved transitions of section 22;
 - insertion of any point other than the one auxiliary inflection point
   per inflection span defined by section 22;
+- sampled-normal, polyline, interpolation, or least-squares offset fitting;
+- silent degree reduction, knot removal, cusp trimming, or self-intersection
+  removal during exact offset construction;
+- publication of a NURBS handle with a nonfinite control, a nonpositive
+  weight, or an unverified homogeneous denominator;
 - silent extrapolation.
 
 # 18. Post-construction invariants
@@ -2052,6 +2321,13 @@ A successfully constructed object guarantees:
    $$
    K=\kappa N_L.
    $$
+
+14. **Exact rational offsets.** For every finite signed distance whose
+    binary64 result is representable, `offset(d)` returns a verified immutable
+    rational quintic NURBS with the same global parameter and
+    $$
+    r_d(u)=r(u)+dN_L(u).
+    $$
 
 # 19. Acceptance tests
 
@@ -2185,6 +2461,34 @@ For straight data verify that:
 - curvature vector is zero;
 - `principal_normal` raises its specified exception.
 
+## 19.6 Exact offset NURBS tests
+
+For open and closed curves, and for straight, convex, inflectional, and mixed
+straight/curved data, test positive, negative, zero, near-zero, and large
+finite distances. Required checks are:
+
+- exact public degree 5;
+- `len(knots) == num_control_points + degree + 1`;
+- clamped endpoint multiplicity 6 and internal multiplicity 5;
+- nondecreasing finite knots, finite controls, and strictly positive weights;
+- read-only snapshots that cannot mutate the handle;
+- source and NURBS parameter domains both exactly $[0,1]$;
+- independent direct comparison with $r(u)+dN_L(u)$ at endpoints, every
+  source/refinement knot from both sides, and dense random interior values;
+- the signed identity
+  $r_{-d}(u)=r(u)-dN_L(u)$;
+- denominator and weights independent of `distance`, subject only to the
+  same deterministic positivity refinement;
+- deterministic repeated construction, including identical knot refinement;
+- a cusp case satisfying $1-d\kappa=0$ within an independent oracle bound;
+- a large-distance self-intersection case, with no trimming or rejection;
+- malformed distance arguments and nonrepresentable output failures;
+- direct high-precision verification of the homogeneous Bernstein
+  coefficient formulas, not only sampled point agreement.
+
+The offset acceptance oracle SHALL use at least 100 decimal digits on selected
+curved spans. A general-purpose approximate offset routine is not an oracle.
+
 # 20. Suggested package organization
 
 ```text
@@ -2196,6 +2500,7 @@ ph_spline/
     construction.py
     nonlinear.py
     arclength.py
+    nurbs.py
     predicates.py
     exceptions.py
     typing.py
@@ -2211,6 +2516,8 @@ Responsibilities:
 - `construction.py`: input classification, endpoint tangents, PH edge lengths;
 - `nonlinear.py`: bounded tridiagonal $G^2$ solve;
 - `arclength.py`: stable exact length and elementary inverse;
+- `nurbs.py`: shared immutable `NURBSHandle`, homogeneous de Boor evaluation,
+  exact PH offset products, positivity refinement, and assembly;
 - `predicates.py`: robust orientation, collinearity and intersection predicates;
 - `exceptions.py`: exception hierarchy;
 - `typing.py`: public and internal type aliases.
@@ -2223,6 +2530,7 @@ PHSpline
 CubicPHSpline
 CubicPHSplineOpen
 CubicPHSplineClosed
+NURBSHandle
 PHSplineError
 CubicPHSplineError
 ```
@@ -2244,7 +2552,8 @@ has exactly two valid outcomes:
    one auxiliary segment pair per inflection span, $G^2$ on every convex
    sub-spline, and exact verified $G^1$ with a curvature sign change at
    every auxiliary inflection point and straight/curved transition - in
-   particular, globally $G^2$ whenever the input data is convex; or
+   particular, globally $G^2$ whenever the input data is convex - and the
+   exact NURBS offset operation of Section 11.7; or
 2. it raises a specific exception explaining why the requested spline
    cannot be constructed reliably.
 
@@ -2258,6 +2567,7 @@ It shall never return:
 - a $G^0$ corner anywhere;
 - a near-cusp;
 - a nonconverged nonlinear approximation;
+- an offset generated by sampling, fitting, or any other approximation;
 - a curve whose arc-length inverse has not passed its residual check.
 
 # 22. General data: auxiliary inflection points and $G^1$ joints
@@ -2635,6 +2945,9 @@ and $r(1)=r(0)=P_0$. `arc_length`, `parameter_at_length` and
 $s\in[0,L]$; they do not implicitly wrap out-of-range scalar arguments.
 At both domain ends, `point`, `tangent`, `normal` and `signed_curvature` SHALL
 return seam-consistent values within their documented tolerances.
+`offset(d)` SHALL return a clamped NURBS on the same finite parameter domain;
+its values at 0 and 1 are the same seam offset point. It does not expose the
+five-period construction guards.
 
 ## 23.6 Required closed tests
 
@@ -2650,4 +2963,23 @@ Conformance tests SHALL include:
 - rejection of fewer than three points and a repeated final seam point;
 - rejection when the selected seam is a curved/straight $G^1$ transition;
 - arc-length inversion and endpoint distance identity;
+- exact positive- and negative-distance NURBS offsets with equal values at
+  both seam parameters;
 - the complete 128-image `examples/cubic_closed` generation run.
+
+# 24. References
+
+1. M. Jaklič, J. Kozak, M. Krajnc, V. Vitrih, and E. Žagar,
+   ["On interpolation by planar cubic $G^2$ Pythagorean-hodograph spline
+   curves"](https://users.fmf.uni-lj.si/knez/clanki/CubicPHG2Spline-rev.pdf),
+   *Mathematics of Computation* 79 (2010), 305-326,
+   DOI [10.1090/S0025-5718-09-02298-4](https://doi.org/10.1090/S0025-5718-09-02298-4).
+2. R. T. Farouki,
+   [*Pythagorean-Hodograph Curves: Algebra and Geometry
+   Inseparable*](https://doi.org/10.1007/978-3-540-73398-0), Springer,
+   2008, Section 17.5, especially the general homogeneous offset formula and
+   the rational quintic controls for PH cubics.
+3. L. Piegl and W. Tiller,
+   [*The NURBS Book*, second edition](https://doi.org/10.1007/978-3-642-59223-2),
+   Springer, 1997, for the NURBS definition, homogeneous de Boor evaluation,
+   knot insertion, and rational Bezier decomposition.

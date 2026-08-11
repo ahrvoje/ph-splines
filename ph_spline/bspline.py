@@ -16,6 +16,10 @@ from ph_spline.bspline_construction import (
     build_ph_bspline_local_state,
     build_ph_bspline_state,
 )
+from ph_spline.bspline_segment import (
+    bernstein_abs_square,
+    bernstein_square,
+)
 from ph_spline.bspline_types import (
     BuildDiagnostics,
     ConstructionPolicy,
@@ -38,6 +42,7 @@ from ph_spline.exceptions import (
     LocalEditFailure,
     NonFiniteCoordinateError,
     NumericalPrecisionError,
+    OffsetConstructionError,
     ParameterOutOfRangeError,
     PHBSplineValueError,
     ResourceLimitError,
@@ -45,6 +50,11 @@ from ph_spline.exceptions import (
     StaleLocationError,
     TransactionError,
     UndefinedPrincipalNormalError,
+)
+from ph_spline.nurbs import (
+    NURBSHandle,
+    build_offset_handle,
+    validate_offset_distance,
 )
 
 _EPS = np.finfo(np.float64).eps
@@ -954,6 +964,122 @@ class PHBSpline(PHSpline):
     ) -> NDArray[np.float64]:
         return self.point(self.advance_by_length(location, ds))
 
+    # -- exact parallel offset (spec section 15.6) ------------------------
+
+    def offset(self, distance: numbers.Real) -> NURBSHandle:
+        """Exact rational NURBS parallel offset at a signed distance.
+
+        Positive ``distance`` offsets along the left unit normal, negative
+        along the right.  One complete committed source version is captured
+        atomically; the returned immutable
+        :class:`~ph_spline.nurbs.NURBSHandle` has degree
+        ``4 * preimage_degree + 1`` and remains unchanged after later
+        source edits.  Construction uses only finite homogeneous Bernstein
+        products of the compiled PH span data; sampling and fitting are
+        never used.
+        """
+        d = validate_offset_distance(distance)
+        state = self._state
+        spans = state.spans
+        span_count = len(spans)
+        origin = state.origin
+        scale = state.scale
+        closed = self._closed
+        span_knots = np.asarray(state.span_knots, dtype=np.float64)
+        join_tolerance = max(
+            1.0e-9, 64.0 * state.diagnostics.continuity_bound
+        )
+
+        if d != 0.0:
+            # The pointwise normal and the connected parallel curve are
+            # unique only when every internal join and any closed seam
+            # share one traversal unit tangent (spec 15.6.1).
+            joins = list(range(1, span_count))
+            if closed:
+                joins.append(0)
+            for j in joins:
+                tl = spans[j - 1].tangent(1.0)
+                tr = spans[j].tangent(0.0)
+                gap = math.hypot(tl[0] - tr[0], tl[1] - tr[1])
+                if not gap <= join_tolerance:
+                    raise DiscontinuousDerivativeError(
+                        "A nonzero offset requires one common unit tangent "
+                        "at every join",
+                        index=j,
+                        quantity="|T-(1) - T+(0)|",
+                        value=gap,
+                        bound=f"<= {join_tolerance:.3e}",
+                    )
+
+        span_controls: list[NDArray[np.float64]] = []
+        span_speeds: list[NDArray[np.float64]] = []
+        span_hodographs: list[NDArray[np.float64]] = []
+        for kernel in spans:
+            position = kernel.position
+            span_controls.append(
+                np.column_stack((position.real, position.imag)).astype(
+                    np.float64, copy=False
+                )
+            )
+            # Independent product recomputation from the authoritative
+            # preimage (spec 15.6.7): speed controls against h*|w|^2.
+            width = kernel.parameter_width
+            speed_check = width * bernstein_abs_square(kernel.preimage)
+            speed_gap = float(np.max(np.abs(speed_check - kernel.speed)))
+            speed_limit = 1.0e-8 * max(1.0, float(np.max(speed_check)))
+            if not speed_gap <= speed_limit:
+                raise OffsetConstructionError(
+                    "Stored span speed controls disagree with h*|w|^2",
+                    operation="offset",
+                    span_id=kernel.span_id,
+                    quantity="max |speed - h*|w|^2|",
+                    value=speed_gap,
+                    bound=f"<= {speed_limit:.3e}",
+                    distance=d,
+                )
+            span_speeds.append(np.asarray(kernel.speed, dtype=np.float64))
+            hodograph = width * bernstein_square(kernel.preimage)
+            span_hodographs.append(
+                np.column_stack((hodograph.real, hodograph.imag)).astype(
+                    np.float64, copy=False
+                )
+            )
+
+        def oracle(u: float) -> tuple[tuple[float, float], tuple[float, float]]:
+            if u <= 0.0:
+                span, local = 0, 0.0
+            elif u >= 1.0:
+                span, local = span_count - 1, 1.0
+            else:
+                span = int(np.searchsorted(span_knots, u, side="right")) - 1
+                span = min(max(span, 0), span_count - 1)
+                width = span_knots[span + 1] - span_knots[span]
+                local = min(
+                    1.0, max(0.0, float((u - span_knots[span]) / width))
+                )
+            kernel = spans[span]
+            z = kernel.point_normalized(local)
+            tx, ty = kernel.tangent(local)
+            return (
+                (origin[0] + scale * z.real, origin[1] + scale * z.imag),
+                (-ty, tx),
+            )
+
+        return build_offset_handle(
+            span_controls=span_controls,
+            span_speeds=span_speeds,
+            span_hodographs=span_hodographs,
+            hodograph_tolerance=1.0e-8,
+            breakpoints=span_knots,
+            distance=d,
+            distance_normalized=d / scale,
+            origin=origin,
+            scale=scale,
+            closed=closed,
+            join_tolerance=join_tolerance,
+            oracle=oracle,
+        )
+
     # -- explicit batches -------------------------------------------------
 
     @staticmethod
@@ -1485,6 +1611,7 @@ class PHBSplineSnapshot:
         "normal",
         "num_points",
         "num_spans",
+        "offset",
         "parameter_at_length",
         "parameters_at_length",
         "point",

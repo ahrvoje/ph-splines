@@ -2,6 +2,7 @@
 
 The public namespace exposes the abstract :class:`CubicPHSpline` and
 :class:`PHBSpline` family bases, their concrete open/closed topology classes,
+the shared read-only :class:`NURBSHandle` returned by ``offset(distance)``,
 policy and value types, and the documented exception hierarchies.
 """
 
@@ -29,6 +30,7 @@ from ph_spline.bspline_types import (
     PointHandle,
 )
 from ph_spline.cubic import CubicPHSpline, CubicPHSplineClosed, CubicPHSplineOpen
+from ph_spline.nurbs import NURBSHandle
 from ph_spline.exceptions import (
     ArcLengthInversionError,
     ArcLengthOutOfRangeError,
@@ -52,6 +54,7 @@ from ph_spline.exceptions import (
     NonRegularSplineError,
     NonSimplePointDataError,
     NumericalPrecisionError,
+    OffsetConstructionError,
     ParameterOutOfRangeError,
     PHBSplineError,
     PHBSplineRuntimeError,
@@ -108,6 +111,8 @@ __all__ = [
     "NonSimplePointDataError",
     "NumericalPolicy",
     "NumericalPrecisionError",
+    "NURBSHandle",
+    "OffsetConstructionError",
     "PHBSpline",
     "PHBSplineClosed",
     "PHBSplineEditTransaction",

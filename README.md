@@ -11,10 +11,16 @@ convenient, efficient and robust without demanding numerical quadrature.
 - Cubic PH Spline (`CubicPHSplineOpen`, `CubicPHSplineClosed`) is highly efficient for static use cases.
 - PH B-spline (`PHBSplineOpen`, `PHBSplineClosed`) supports dynamic editing (moving, adding and deleting nodes) with prescribed continuity-order constraints.
 
+Both families also expose **exact parallel offsets**: `curve.offset(d)` compiles
+the true offset curve as a verified read-only rational NURBS, with no sampling
+or fitting. This exact rationality of offsets is a defining PH property that
+ordinary polynomial splines do not have.
+
 ## 1. Cubic PH Spline
 
 Point-interpolating planar **cubic Pythagorean-hodograph (PH) splines** with
-verified geometry, exact arc length and closed-form arc-length inversion.
+verified geometry, exact arc length, closed-form arc-length inversion and
+exact rational NURBS offsets.
 
 ![A 20-metre spline route with exact distance stations and two points five metres of travel apart](examples/cubic/readme_distance_evaluation.png)
 
@@ -65,7 +71,13 @@ import numpy as np
 from ph_spline import CubicPHSplineClosed
 
 loop = CubicPHSplineClosed([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]])
-assert loop.closed and np.array_equal(loop.point(0.0), loop.point(1.0))
+
+# Exact parallel curve as a verified rational quintic NURBS.
+# Positive distance is to the traversal-left side; zero and negative work too.
+ring = loop.offset(0.25)
+assert ring.degree == 5 and ring.domain == (0.0, 1.0) and ring.closed
+u = 0.37
+assert np.allclose(ring.point(u), loop.point(u) + 0.25 * loop.normal(u))
 ```
 
 ### Gallery
@@ -76,8 +88,8 @@ assert loop.closed and np.array_equal(loop.point(0.0), loop.point(1.0))
 | *An open, random-walk coastline with tight coves, broad headlands and many inflections.* | *A cambered axial-turbine section with a finite trailing-edge radius.* |
 | ![Tokamak flux surface](examples/cubic_closed/003_tokamak_flux_surface.png) | ![Open exhaust-header centerline](examples/cubic/nonconvex/58_exhaust_header.png) |
 | *A D-shaped magnetic-confinement surface with curvature vectors.* | *An open, asymmetric exhaust runner with alternating bends and distance stations.* |
-| ![Noncircular gear](examples/cubic_closed/005_noncircular_gear.png) | ![Open overhand trace](examples/cubic/pathological/36_overhand_scribble.png) |
-| *An elliptic pitch profile carrying fourteen smoothly resolved teeth.* | *An irregular open trace with self-crossings, tight reversals and broad sweeping arcs.* |
+| ![Exact offset track edges](examples/cubic_closed_offset/017_race_track_edges.png) | ![Open overhand trace](examples/cubic/pathological/36_overhand_scribble.png) |
+| *Exact rational NURBS offsets tracing both track edges of a grand-prix centerline.* | *An irregular open trace with self-crossings, tight reversals and broad sweeping arcs.* |
 
 ### Where distance-domain evaluation matters
 
@@ -86,6 +98,18 @@ distributed uniformly along a path: contour design, CNC and robot motion,
 autonomous navigation, constant-speed animation, spatial and GIS queries,
 collision sampling, physical simulation, sensing, inspection, and placement
 of textures, annotations or material along a curve.
+
+### Where exact offsets matter
+
+Exact rational offsets serve everywhere a parallel curve is a requirement,
+not a decoration: CNC cutter-radius compensation, stepover and pocketing
+plans, wire-EDM and laser kerf allowance, trajectory optimization under
+clearance constraints, robot and AGV safety corridors, boundary-layer mesh
+inflation, mold shrink compensation, coverage and buffer zoning, tolerance
+bands, and lossless export to CAD/CAM as an ordinary NURBS. The
+[`examples/cubic_offset`](examples/cubic_offset) and
+[`examples/cubic_closed_offset`](examples/cubic_closed_offset) galleries
+render 64 verified offset studies across these domains.
 
 ### Background
 
@@ -130,6 +154,12 @@ roots or hyperbolic functions. Bounded Newton iterations only correct rounding.
   factored recovery of `t` (never `y - h`), end-reversed inversion near
   `t = 1`, safeguarded Newton with a fixed iteration bound and an explicit
   arc-length residual gate `64 eps L + 4 ulp(s)`.
+- `offset(d)` compiles the exact rational quintic offset from homogeneous
+  Bernstein products of the stored speed and hodograph, refines Bernstein
+  weights to strict positivity by deterministic midpoint subdivision, and
+  independently verifies structure, coefficients and sampled geometry before
+  publishing an immutable handle. Cusps and self-intersections of the true
+  parallel curve are kept exactly, never trimmed or smoothed.
 - Works verified from coordinate magnitudes `1e-150` to `1e307`, curvatures
   `1e-12` to `1e12`, chord ratios down to ~`5e-13`, and systems beyond 1000
   segments (sparse banded path).
@@ -165,7 +195,8 @@ polynomials on every span. The default request is G²; `g_order`, `c_order` and
 continuity. The minimum sufficient preimage order is selected directly as
 `max(2, g_order, c_order, curvature_order + 2)`, giving PH degree
 `2 * order + 1`; a simple midpoint knot supplies shape freedom without
-inflating that degree.
+inflating that degree. `offset(d)` works at every order and compiles the
+exact parallel curve as a read-only rational NURBS of degree `4 * order + 1`.
 
 ```python
 import numpy as np
@@ -179,10 +210,10 @@ curve = PHBSplineOpen(
 # Analytic distance access is retained at variable degree.
 midpoint = curve.point_at_length(0.5 * curve.length)
 
-# Derivatives are full vectors of arbitrary configured order.
-velocity = curve.derivative(0.4)
-parameter_jet = curve.jet(0.4, 6)
-curvature_jet = curve.curvature_vector_jet(0.4, 4)
+# Exact parallel curve as a read-only rational NURBS of degree 4m + 1.
+shell = curve.offset(0.2)
+assert shell.degree == 4 * curve.preimage_degree + 1
+assert np.allclose(shell.point(0.4), curve.point(0.4) + 0.2 * curve.normal(0.4))
 
 # Handles survive insertion and index shifts; edits commit atomically.
 handle = curve.point_handle(2)
@@ -205,14 +236,17 @@ stations = snapshot.points_at_length(
 
 The isolated [`examples/bspline`](examples/bspline) directory contains
 generators and rendered output for all 224 referenced input cases, plus 128 PH
-B-spline-specific cases in eight feature families.
+B-spline-specific cases in eight feature families. The
+[`examples/bspline_offset`](examples/bspline_offset) and
+[`examples/bspline_closed_offset`](examples/bspline_closed_offset) galleries
+add 64 verified exact-offset studies, several at G3 and G4 continuity.
 
 | | |
 |---|---|
-| ![Closed G8 radial zigzag star](examples/bspline/pathological/14_star_zigzag_radial.png) | ![Closed distance stations](examples/bspline/features/02_closed_distance_stations/005_closed_distance_stations.png) |
-| *A closed, symmetric radial zigzag star built from degree-17 G8 PH spans.* | *A closed curve with equal arc-length stations.* |
-| ![Local move example](examples/bspline/features/03_local_move/009_local_move.png) | ![G8 centripetal-force example](examples/bspline/features/07_arc_derivative_jets/010_arc_derivative_jets.png) |
-| *A handle-based G2 move recompiles ten local spans.* | *The G8 curvature vector: the centripetal-force vector.* |
+| ![Closed G8 radial zigzag star](examples/bspline/pathological/14_star_zigzag_radial.png) | ![Exact offset blanket shells](examples/bspline_closed_offset/008_fusion_blanket_shells.png) |
+| *A closed, symmetric radial zigzag star built from degree-17 G8 PH spans.* | *Nested degree-9 rational offset shells outside a D-shaped fusion plasma boundary.* |
+| ![Cochlear electrode clearance offsets](examples/bspline_offset/027_cochlear_electrode_clearance.png) | ![G8 centripetal-force example](examples/bspline/features/07_arc_derivative_jets/010_arc_derivative_jets.png) |
+| *Two-sided insertion clearance walls about a cochlear electrode spiral.* | *The G8 curvature vector: the centripetal-force vector.* |
 
 ### Editing and higher-order geometry
 
@@ -249,6 +283,10 @@ geometry and numerical quadrature are absent from these kernels.
   preimage jets stabilize high-order join evaluation.
 - Arc inversion uses a monotone span lookup, a linear bracket seed and bounded
   safeguarded Newton/bisection with a final forward-residual check.
+- `offset(d)` reuses one shared verified pipeline at every continuity order:
+  it emits a degree `4m + 1` rational NURBS whose positive denominator is the
+  PH speed itself, captures one committed source version atomically, and the
+  returned handle stays valid and bitwise unchanged through later edits.
 - Construction and edits publish only finite, verified curves; requested
   continuity and degree are never silently downgraded.
 
@@ -375,6 +413,7 @@ recompilation as total-size-independent execution.
     <tr><td><code>arc_length(u: Real) -&gt; float</code></td><td>Length from <code>u=0</code> to <code>u</code>.</td></tr>
     <tr><td><code>parameter_at_length(s: Real) -&gt; float</code></td><td>Parameter at travelled length <code>s</code>.</td></tr>
     <tr><td><code>point_at_length(s: Real) -&gt; NDArray</code></td><td>Position at travelled length <code>s</code>.</td></tr>
+    <tr><td><code>offset(distance: Real) -&gt; NURBSHandle</code></td><td>Exact parallel curve as a verified rational quintic NURBS.</td></tr>
   </tbody>
 </table>
 
@@ -437,6 +476,7 @@ recompilation as total-size-independent execution.
     <tr><td><code>frame_at_length(s: Union[Real, LengthCoordinate]) -&gt; Frame2D</code></td><td>Position, tangent, normal and curvature at length.</td></tr>
     <tr><td><code>advance_by_length(location: CurveLocation, ds: Real) -&gt; CurveLocation</code></td><td>Advance a local location by signed distance.</td></tr>
     <tr><td><code>point_after_length(location: CurveLocation, ds: Real) -&gt; NDArray[np.float64]</code></td><td>Position after signed travel from a location.</td></tr>
+    <tr><td><code>offset(distance: Real) -&gt; NURBSHandle</code></td><td>Exact parallel curve as a verified degree-<code>4m+1</code> rational NURBS; also on snapshots.</td></tr>
   </tbody>
 </table>
 
@@ -463,5 +503,36 @@ recompilation as total-size-independent execution.
     <tr><td><code>PHBSplineEditTransaction.delete_point(point: Union[int, PointHandle]) -&gt; None</code></td><td>Stage a deletion.</td></tr>
     <tr><td><code>PHBSplineEditTransaction.report -&gt; EditReport</code></td><td>Commit report, available after successful context exit.</td></tr>
     <tr><td><code>snapshot() -&gt; PHBSplineSnapshot</code></td><td>Immutable query-only view of the current version.</td></tr>
+  </tbody>
+</table>
+
+### NURBS offset handle
+
+`offset(distance)` on every spline class returns the same immutable
+`NURBSHandle`. Positive distance selects the traversal-left normal, negative
+the right; zero is valid. The handle is a verified snapshot: it never
+mutates, keeps no live back-reference, and stays unchanged when a mutable
+source is edited later. Cusps and self-intersections of the true parallel
+curve are represented exactly, never trimmed. Construction either passes a
+full independent verification (structure, coefficient identities, sampled
+geometry) or raises `OffsetConstructionError`.
+
+<table width="100%">
+  <thead>
+    <tr>
+      <th width="55%">Signature or property</th>
+      <th width="45%">Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>.degree -&gt; int</code></td><td>Rational degree: 5 (cubic) or <code>4 * preimage_degree + 1</code> (B-spline).</td></tr>
+    <tr><td><code>.knots -&gt; NDArray[np.float64]</code></td><td>Clamped knot vector of shape <code>(num_control_points + degree + 1,)</code>.</td></tr>
+    <tr><td><code>.control_points -&gt; NDArray[np.float64]</code></td><td>Read-only <code>(n, 2)</code> control points in user coordinates.</td></tr>
+    <tr><td><code>.weights -&gt; NDArray[np.float64]</code></td><td>Strictly positive rational weights, independent of the distance.</td></tr>
+    <tr><td><code>.num_control_points -&gt; int</code></td><td>Control count, <code>num_spans * degree + 1</code>.</td></tr>
+    <tr><td><code>.num_spans -&gt; int</code></td><td>Rational Bezier span count.</td></tr>
+    <tr><td><code>.domain -&gt; tuple[float, float]</code></td><td>Exactly <code>(0.0, 1.0)</code>; the source parameter is unchanged.</td></tr>
+    <tr><td><code>.closed -&gt; bool</code></td><td>Whether the source (and seam values) are cyclic.</td></tr>
+    <tr><td><code>point(u: Real) -&gt; NDArray[np.float64]</code></td><td>Homogeneous de Boor evaluation with one final division.</td></tr>
   </tbody>
 </table>

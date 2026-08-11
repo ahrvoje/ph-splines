@@ -77,5 +77,9 @@ class PHSpline(ABC):
     def point_at_length(self, s: object) -> Vector2:
         """Return the point reached after travelling distance ``s``."""
 
+    @abstractmethod
+    def offset(self, distance: object):
+        """Return the exact signed parallel offset as a read-only NURBS."""
+
 
 __all__ = ["PHSpline"]

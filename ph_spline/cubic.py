@@ -47,6 +47,11 @@ from ph_spline.exceptions import (
     UndefinedPrincipalNormalError,
 )
 from ph_spline.nonlinear import solve_closed_tangents, solve_internal_tangents
+from ph_spline.nurbs import (
+    NURBSHandle,
+    build_offset_handle,
+    validate_offset_distance,
+)
 from ph_spline.segment import PHSegment
 from ph_spline.typing import PointSequence, Vector2
 
@@ -783,6 +788,85 @@ class CubicPHSpline(PHSpline):
         kappa = seg.curvature_local(t) / self._scale
         tx, ty = seg.tangent_local(t)
         return np.array([-kappa * ty, kappa * tx], dtype=np.float64)
+
+    # ------------------------------------------------------------------
+    # Exact parallel offset (spec section 11.7)
+    # ------------------------------------------------------------------
+
+    def offset(self, distance: object) -> NURBSHandle:
+        """Exact rational NURBS parallel offset at a signed distance.
+
+        Positive ``distance`` offsets along the left unit normal, negative
+        along the right.  The result is an immutable, fully verified
+        rational quintic :class:`~ph_spline.nurbs.NURBSHandle` over the
+        unchanged global parameter; it is built from finite homogeneous
+        Bernstein products of the stored PH data, never from sampling or
+        fitting.
+        """
+        d = validate_offset_distance(distance)
+        segments = self._segments
+        origin = self._origin
+        scale = self._scale
+        span_controls: list[np.ndarray] = []
+        span_speeds: list[np.ndarray] = []
+        span_hodographs: list[np.ndarray] = []
+        for seg in segments:
+            span_controls.append(np.asarray(seg.ctrl, dtype=np.float64))
+            w0 = seg.w0
+            w1 = seg.w1
+            # Degree-2 Bernstein speed coefficients of sigma = |w(t)|^2 from
+            # the stored preimage: exact endpoint speeds and the mixed
+            # midpoint product Re(conj(w0) w1).
+            span_speeds.append(
+                np.array(
+                    [
+                        seg.sigma(0.0),
+                        (w0.conjugate() * w1).real,
+                        seg.sigma(1.0),
+                    ],
+                    dtype=np.float64,
+                )
+            )
+            h0 = w0 * w0
+            h1 = w0 * w1
+            h2 = w1 * w1
+            span_hodographs.append(
+                np.array(
+                    [
+                        [h0.real, h0.imag],
+                        [h1.real, h1.imag],
+                        [h2.real, h2.imag],
+                    ],
+                    dtype=np.float64,
+                )
+            )
+
+        knots = self._knots
+
+        def oracle(u: float) -> tuple[tuple[float, float], tuple[float, float]]:
+            i, t, _ = self._locate_u(u)
+            seg = segments[i]
+            x, y = seg.point_local(t)
+            tx, ty = seg.tangent_local(t)
+            return (
+                (origin[0] + scale * x, origin[1] + scale * y),
+                (-ty, tx),
+            )
+
+        return build_offset_handle(
+            span_controls=span_controls,
+            span_speeds=span_speeds,
+            span_hodographs=span_hodographs,
+            hodograph_tolerance=1.0e-8,
+            breakpoints=np.asarray(knots, dtype=np.float64),
+            distance=d,
+            distance_normalized=d / scale,
+            origin=origin,
+            scale=scale,
+            closed=self.closed,
+            join_tolerance=EPS_TANGENT,
+            oracle=oracle,
+        )
 
     # ------------------------------------------------------------------
     # Arc-length operations (spec section 14)

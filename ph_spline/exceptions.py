@@ -37,6 +37,7 @@ __all__ = [
     "NonRegularSplineError",
     "NonSimplePointDataError",
     "NumericalPrecisionError",
+    "OffsetConstructionError",
     "PHBSplineError",
     "PHBSplineRuntimeError",
     "PHBSplineValueError",
@@ -70,6 +71,8 @@ class PHSplineError(Exception):
         value: object = None,
         bound: object = None,
         iteration: int | None = None,
+        distance: float | None = None,
+        refinement_depth: int | None = None,
     ) -> None:
         self.index = index
         self.point_id = point_id
@@ -80,6 +83,8 @@ class PHSplineError(Exception):
         self.value = value
         self.bound = bound
         self.iteration = iteration
+        self.distance = distance
+        self.refinement_depth = refinement_depth
         details = []
         if index is not None:
             details.append(f"index={index}")
@@ -99,6 +104,10 @@ class PHSplineError(Exception):
             details.append(f"required bound={bound!r}")
         if iteration is not None:
             details.append(f"iteration={iteration}")
+        if distance is not None:
+            details.append(f"distance={distance!r}")
+        if refinement_depth is not None:
+            details.append(f"refinement_depth={refinement_depth}")
         if details:
             message = f"{message} [{', '.join(details)}]"
         super().__init__(message)
@@ -204,6 +213,10 @@ class LengthResolutionError(CubicPHSplineRuntimeError, PHBSplineRuntimeError):
 
 class NumericalPrecisionError(CubicPHSplineRuntimeError, PHBSplineRuntimeError):
     """A quantity cannot be computed reliably in binary64 arithmetic."""
+
+
+class OffsetConstructionError(CubicPHSplineRuntimeError, PHBSplineRuntimeError):
+    """Exact offset NURBS construction or verification could not complete."""
 
 
 class ContinuitySpecificationError(PHBSplineValueError):
