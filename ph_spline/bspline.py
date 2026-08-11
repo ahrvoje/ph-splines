@@ -385,6 +385,36 @@ class PHBSpline(PHSpline):
         return LengthCoordinate(self._total_length, 0.0)
 
     @property
+    def min_curvature_radii(self) -> tuple[float, float]:
+        """Smallest left/right curvature radii ``(rho_left, rho_right)``.
+
+        ``rho_left`` bounds the cusp-free positive offset range and
+        ``rho_right`` the negative one: every ``offset(d)`` with
+        ``-rho_right < d < rho_left`` is free of cusps, and equality reaches
+        ``1 - d * kappa = 0`` exactly.  A side with no curvature of that
+        sign reports ``math.inf``.  Per-span extremes are certified during
+        span compilation (Bernstein sign-test subdivision of the critical
+        polynomial); the merge over spans is cached per committed version,
+        so repeated queries are O(1).
+        """
+        cached = self.__dict__.get("_min_radii_cache")
+        if cached is not None and cached[0] == self._version:
+            return cached[1]
+        kappa_left = 0.0
+        kappa_right = 0.0
+        for span in self._spans:
+            if span.kappa_max > kappa_left:
+                kappa_left = span.kappa_max
+            if -span.kappa_min > kappa_right:
+                kappa_right = -span.kappa_min
+        result = (
+            self._scale / kappa_left if kappa_left > 0.0 else math.inf,
+            self._scale / kappa_right if kappa_right > 0.0 else math.inf,
+        )
+        self.__dict__["_min_radii_cache"] = (self._version, result)
+        return result
+
+    @property
     def version(self) -> int:
         return self._version
 
@@ -1608,6 +1638,7 @@ class PHBSplineSnapshot:
         "length",
         "length_coordinate",
         "location_at_length",
+        "min_curvature_radii",
         "normal",
         "num_points",
         "num_spans",

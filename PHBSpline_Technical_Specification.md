@@ -665,6 +665,9 @@ def length(self) -> float: ...
 def length_coordinate(self) -> LengthCoordinate: ...
 
 @property
+def min_curvature_radii(self) -> tuple[float, float]: ...  # (rho_L, rho_R)
+
+@property
 def version(self) -> int: ...
 
 @property
@@ -1107,6 +1110,7 @@ forward and reverse Bernstein arc coefficients
 optional power coefficients for low-degree fast seeds
 span length as float64
 regularity lower and upper bounds
+signed normalized curvature extremes
 inverse LUT
 ```
 
@@ -2142,6 +2146,30 @@ denominator is the strictly positive source speed. Cusp classification,
 trimming, and planar-region Boolean operations are outside the minimal
 `NURBSHandle` interface.
 
+## 15.7 Minimal curvature radii
+
+`min_curvature_radii` SHALL return
+$(\rho_L,\rho_R)=(1/\max(\kappa^+,0),\,1/\max(-\kappa^-,0))$ in user
+units, with `math.inf` for a side whose curvature sign never occurs. By
+Section 15.6.8, every `offset(d)` with $-\rho_R<d<\rho_L$ is free of
+cusps and equality reaches $1-d\kappa=0$ exactly, so the bound is sharp.
+
+On a compiled span, $\hat\kappa(\nu)=2P(\nu)/(h\,Q(\nu))$ with
+$P=\operatorname{Im}(\bar w\,w_\nu)$ of degree $2m-1$ and
+$Q=(|w|^2)^2$ of degree $4m$. Interior extrema are the sign-crossing
+roots of the critical polynomial $E=P'Q-PQ'$ of degree $6m-2$. The
+reference profile computes the Bernstein coefficients of $E$ by exact
+finite products and isolates its crossings by recursive midpoint
+subdivision with the coefficient sign test: an interval whose
+coefficients keep one strict sign contains no crossing, and a tangential
+zero of $E$ is a curvature inflection, not an extremum, so the
+enumeration is exhaustive. Subdivision depth 30 resolves each candidate
+to second-order accuracy in the extremum value; endpoints are always
+candidates. The signed span extremes SHALL be stored on the immutable
+span kernel at compilation, the merge over spans SHALL be cached per
+committed version, and repeated queries SHALL be $O(1)$. Sampling-only
+estimation is forbidden.
+
 # 16. Numerical safety requirements
 
 ## 16.1 General prohibitions
@@ -2418,6 +2446,8 @@ For fixed $m$, bounded hidden-span ratio, and bounded $I$:
 | Sequential cursor advance | amortized `O(1 + crossed_spans)` |
 | Exact NURBS offset build | `O((M + R)*m^2)` time and `O(R*m)` output storage |
 | NURBS `point(u)` | `O(log R + m^2)` for binary search and degree-$(4m+1)$ de Boor evaluation |
+| Span curvature extremes at compile | `O(m^2 * depth)` per span via sign-test subdivision |
+| `min_curvature_radii` | `O(M)` merge on the first query per version, then `O(1)` |
 
 Absolute timing targets SHALL be benchmark gates, not API guarantees. The
 local nonlinear portion and total edit latency SHALL be reported separately;
@@ -2700,6 +2730,22 @@ Sampled point agreement alone is insufficient. The oracle SHALL also compare
 the coefficient products for $\sigma z+dR_L(v)$ and $\sigma$ and evaluate the
 NURBS through an implementation independent of the production evaluator.
 
+## 22.12 Minimal-radius tests
+
+Required checks for `min_curvature_radii`:
+
+- agreement with an independently refined dense curvature extremum to near
+  machine precision at several continuity orders, open and closed, with
+  the seam and the open endpoints included as extremum candidates;
+- the sharp upper-bound property: no sampled curvature exceeds the
+  reported bound;
+- `inf` reporting for a side whose curvature sign never occurs;
+- the cusp condition $1-\rho\,\kappa_{\max}=0$ at the reported radius, with
+  `offset` accepting distances at and beyond it;
+- cache invalidation by committed edits, agreement with a fresh
+  construction of the edited data, and snapshot isolation from later
+  edits.
+
 # 23. Acceptance criteria
 
 Version 1 is releasable only when all of the following are true:
@@ -2808,6 +2854,8 @@ u = curve.parameter_at_length(0.37 * L)
 t = curve.tangent(u)
 
 # Exact parallel curve: positive distance is to the traversal-left side.
+# Offsets are cusp-free exactly for -rho_right < d < rho_left.
+rho_left, rho_right = curve.min_curvature_radii
 offset = curve.offset(0.125)
 assert offset.degree == 4 * curve.preimage_degree + 1
 assert offset.domain == (0.0, 1.0)

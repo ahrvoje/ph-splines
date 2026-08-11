@@ -89,6 +89,7 @@ class CubicPHSpline(PHSpline):
         "_joint_tangents",
         "_knots",
         "_m",
+        "_min_radii",
         "_n_segments",
         "_origin",
         "_points",
@@ -231,6 +232,11 @@ class CubicPHSpline(PHSpline):
         object.__setattr__(self, "_prefix", prefix_arr)
         object.__setattr__(self, "_prefix_user", prefix_user)
         object.__setattr__(self, "_total_length", float(prefix_user[-1]))
+        object.__setattr__(
+            self,
+            "_min_radii",
+            self._compute_min_radii(segments, input_geometry.scale),
+        )
         unique_taus = set(segment_taus)
         tau = next(iter(unique_taus)) if len(unique_taus) == 1 else 0
         object.__setattr__(self, "_tau", tau)
@@ -402,6 +408,42 @@ class CubicPHSpline(PHSpline):
     # ------------------------------------------------------------------
     # Post-construction verification (spec section 10)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_min_radii(
+        segments: list[PHSegment], scale: float
+    ) -> tuple[float, float]:
+        """Exact smallest left/right curvature radii in user units.
+
+        Per segment ``kappa(t) = 2 chi / sigma(t)^2`` with constant ``chi``,
+        so the curvature extremum lies exactly at the speed minimum.  The
+        discriminant identity ``A C - (B/2)^2 = chi^2`` gives the interior
+        minimum ``sigma_min = chi^2 / A`` without cancellation; the endpoint
+        speeds come from the exact preimage values.  A side with no
+        curvature of that sign reports ``math.inf``.
+        """
+        best_left = math.inf
+        best_right = math.inf
+        for seg in segments:
+            chi = seg.chi
+            if chi == 0.0:
+                continue
+            s0 = seg.sigma(0.0)
+            s1 = seg.sigma(1.0)
+            s_min = s0 if s0 < s1 else s1
+            if seg.A > 0.0:
+                t_star = -0.5 * seg.B / seg.A
+                if 0.0 < t_star < 1.0:
+                    interior = chi * chi / seg.A
+                    if interior < s_min:
+                        s_min = interior
+            radius = scale * s_min * s_min / (2.0 * abs(chi))
+            if chi > 0.0:
+                if radius < best_left:
+                    best_left = radius
+            elif radius < best_right:
+                best_right = radius
+        return (best_left, best_right)
 
     @staticmethod
     def _verify_regularity(segments: list[PHSegment]) -> None:
@@ -750,6 +792,21 @@ class CubicPHSpline(PHSpline):
         return self._total_length
 
     @property
+    def min_curvature_radii(self) -> tuple[float, float]:
+        """Smallest left/right curvature radii ``(rho_left, rho_right)``.
+
+        ``rho_left`` is the smallest radius of curvature among left-turning
+        (positive-curvature) points and bounds the cusp-free positive offset
+        range; ``rho_right`` is its right-turning counterpart.  Every
+        ``offset(d)`` with ``-rho_right < d < rho_left`` is free of cusps;
+        equality reaches the cusp condition ``1 - d * kappa = 0`` exactly.
+        A side with no curvature of that sign reports ``math.inf``.  The
+        value is exact (closed form, a few ulps), computed once during
+        construction, and returned in O(1).
+        """
+        return self._min_radii
+
+    @property
     def aux_inflection_points(self) -> list[dict[str, float]]:
         """Auxiliary inflection points inserted during construction.
 
@@ -1030,6 +1087,9 @@ class CubicPHSplineClosed(CubicPHSpline):
         object.__setattr__(self, "_prefix", prefix_normalized)
         object.__setattr__(self, "_prefix_user", prefix_user)
         object.__setattr__(self, "_total_length", float(prefix_user[-1]))
+        object.__setattr__(
+            self, "_min_radii", self._compute_min_radii(segments, geometry.scale)
+        )
         object.__setattr__(self, "_tau", geometry.tau)
         object.__setattr__(self, "_is_straight", False)
         object.__setattr__(self, "_boundary_clamped", (False, False))
@@ -1200,6 +1260,9 @@ class CubicPHSplineClosed(CubicPHSpline):
         object.__setattr__(self, "_prefix", prefix_normalized)
         object.__setattr__(self, "_prefix_user", prefix_user)
         object.__setattr__(self, "_total_length", float(prefix_user[-1]))
+        object.__setattr__(
+            self, "_min_radii", self._compute_min_radii(segments, periodic._scale)
+        )
         unique_taus = set(taus)
         object.__setattr__(
             self, "_tau", next(iter(unique_taus)) if len(unique_taus) == 1 else 0

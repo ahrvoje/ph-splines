@@ -161,6 +161,7 @@ curve.parameter_at_length(s)
 curve.point_at_length(s)
 
 curve.offset(distance)
+curve.min_curvature_radii
 ```
 
 ## 2.3 Return types
@@ -177,6 +178,7 @@ curve.offset(distance)
 | `parameter_at_length` | Python `float` |
 | `point_at_length` | NumPy `float64` array of shape `(2,)` |
 | `offset` | immutable `NURBSHandle` |
+| `min_curvature_radii` | `tuple[float, float]`; each entry finite positive or `math.inf` |
 
 All returned arrays shall be newly allocated or read-only. A caller must not be able to mutate the spline through a returned object.
 
@@ -1542,6 +1544,42 @@ not rational poles: the NURBS denominator is the strictly positive source
 speed and is independent of $d$. Trimming and cusp classification are outside
 the `NURBSHandle` interface.
 
+## 11.8 Minimal curvature radii
+
+`min_curvature_radii` SHALL return the property
+
+$$
+\left(\rho_L,\rho_R\right)
+=\left(\frac{1}{\max(\kappa^+,0)},\ \frac{1}{\max(-\kappa^-,0)}\right),
+$$
+
+where $\kappa^+$ and $\kappa^-$ are the largest and smallest signed
+curvatures over the whole spline in user units and a vanishing side reports
+`math.inf`. By Section 11.7.6, every `offset(d)` with
+$-\rho_R<d<\rho_L$ is free of cusps and equality reaches $1-d\kappa=0$
+exactly.
+
+Because $\kappa(t)=2\chi/\sigma(t)^2$ with constant $\chi$ per segment, the
+per-segment extremum lies exactly at the speed minimum. The implementation
+SHALL use the cancellation-free discriminant identity
+
+$$
+AC-\left(\tfrac B2\right)^2=\chi^2
+\quad\Longrightarrow\quad
+\sigma_{\min}^{\text{interior}}=\frac{\chi^2}{A},
+$$
+
+together with the exact preimage endpoint speeds $|w_0|^2$ and $|w_1|^2$,
+select the smaller, and report
+
+$$
+\rho=\frac{H\,\sigma_{\min}^2}{2|\chi|}
+$$
+
+per segment with the sign of $\chi$ deciding the side. The value SHALL be
+computed once during construction and returned in $O(1)$; sampling is
+forbidden and the result is exact to a few ulps.
+
 # 12. Exact local arc length
 
 For one segment,
@@ -2329,6 +2367,15 @@ A successfully constructed object guarantees:
     r_d(u)=r(u)+dN_L(u).
     $$
 
+15. **Exact minimal curvature radii.** `min_curvature_radii` bounds the
+    signed curvature everywhere:
+    $$
+    -\frac{1}{\rho_R}\le\kappa(u)\le\frac{1}{\rho_L}
+    \quad\forall u,
+    $$
+    with equality attained, so the cusp-free offset range
+    $-\rho_R<d<\rho_L$ is sharp.
+
 # 19. Acceptance tests
 
 ## 19.1 Exact and near-exact geometry tests
@@ -2488,6 +2535,21 @@ finite distances. Required checks are:
 
 The offset acceptance oracle SHALL use at least 100 decimal digits on selected
 curved spans. A general-purpose approximate offset routine is not an oracle.
+
+## 19.7 Minimal-radius tests
+
+Required checks for `min_curvature_radii`:
+
+- a completely straight spline reports `(inf, inf)`;
+- one-sided arcs report `inf` on the curvature-free side, and reversing
+  the traversal swaps the sides;
+- on curved data both entries agree with an independently refined dense
+  curvature extremum to near machine precision, and the reported radius is
+  never larger than any sampled one (sharp upper-bound property);
+- the cusp condition $1-\rho\,\kappa_{\max}=0$ holds at the reported
+  radius, and `offset` accepts distances at and beyond it;
+- the value survives pickling and copying bitwise and repeated
+  construction is deterministic.
 
 # 20. Suggested package organization
 

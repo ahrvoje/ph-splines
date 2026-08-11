@@ -117,6 +117,86 @@ def bernstein_abs_square(values: NDArray[np.complex128]) -> NDArray[np.float64]:
     return result
 
 
+def _general_product(a: NDArray, b: NDArray) -> NDArray:
+    """Bernstein coefficients of the product of two Bernstein polynomials."""
+
+    degree_a = a.size - 1
+    degree_b = b.size - 1
+    out = np.zeros(degree_a + degree_b + 1, dtype=np.result_type(a, b))
+    for i in range(degree_a + 1):
+        factor = math.comb(degree_a, i) * a[i]
+        for j in range(degree_b + 1):
+            out[i + j] += (
+                factor
+                * math.comb(degree_b, j)
+                / math.comb(degree_a + degree_b, i + j)
+                * b[j]
+            )
+    return out
+
+
+def curvature_extremes(
+    preimage: NDArray[np.complex128], parameter_width: float
+) -> tuple[float, float]:
+    """Certified signed extremes of the normalized curvature on one span.
+
+    With ``kappa_hat(t) = 2 Im(conj(w) w_u) / (h |w|^4) = 2 P / (h Q)``,
+    interior extrema are sign-crossing roots of ``E = P'Q - PQ'`` (degree
+    ``6m - 2``).  A Bernstein interval whose coefficients keep one strict
+    sign contains no crossing, and a tangential zero of ``E`` is a
+    curvature inflection rather than an extremum, so recursive midpoint
+    subdivision with the coefficient sign test enumerates every extremum
+    candidate.  Subdivision to depth 30 resolves each root to ``~1e-9`` in
+    ``t``, which is second-order small in the extremum value.
+    """
+
+    w = np.asarray(preimage, dtype=np.complex128)
+    dw = (w.size - 1) * np.diff(w)
+    numerator = _general_product(np.conjugate(w), dw).imag.copy()
+    speed2 = _general_product(np.conjugate(w), w).real.copy()
+    denominator = _general_product(speed2, speed2)
+    d_num = (numerator.size - 1) * np.diff(numerator)
+    d_den = (denominator.size - 1) * np.diff(denominator)
+    critical = _general_product(d_num, denominator) - _general_product(
+        numerator, d_den
+    )
+
+    def kappa(t: float) -> float:
+        return (
+            2.0
+            * float(de_casteljau(numerator, t))
+            / (parameter_width * float(de_casteljau(denominator, t)))
+        )
+
+    candidates = [0.0, 1.0]
+    magnitude = float(np.max(np.abs(critical)))
+    if magnitude > 0.0:
+        ambiguous = 1.0e-14 * magnitude
+        stack: list[tuple[float, float, NDArray[np.float64], int]] = [
+            (0.0, 1.0, critical, 0)
+        ]
+        boxes = 0
+        while stack:
+            lo, hi, coeffs, depth = stack.pop()
+            boxes += 1
+            has_pos = bool(np.any(coeffs > ambiguous))
+            has_neg = bool(np.any(coeffs < -ambiguous))
+            if not has_pos and not has_neg:
+                candidates.append(0.5 * (lo + hi))  # locally flat E
+                continue
+            if not (has_pos and has_neg):
+                continue  # one strict sign: no crossing inside
+            if depth >= 30 or boxes > 4096:
+                candidates.append(0.5 * (lo + hi))
+                continue
+            left, right = _split_half(coeffs)
+            mid = 0.5 * (lo + hi)
+            stack.append((mid, hi, right, depth + 1))
+            stack.append((lo, mid, left, depth + 1))
+    values = [kappa(t) for t in candidates]
+    return (min(values), max(values))
+
+
 def _split_half(values: NDArray[np.complex128]) -> tuple[NDArray, NDArray]:
     degree = values.size - 1
     triangle = [np.array(values, copy=True)]
@@ -191,6 +271,8 @@ class PHBSplineSpan:
     length: float
     regularity_lower: float
     regularity_upper: float
+    kappa_min: float
+    kappa_max: float
     lut_u: NDArray[np.float64]
     lut_s: NDArray[np.float64]
 
@@ -421,6 +503,7 @@ def compile_span(
     lut_s[-1] = length
     if not np.all(np.diff(lut_s) > 0.0):
         raise ArithmeticError("PH B-spline inverse LUT is not strictly monotone")
+    kappa_min, kappa_max = curvature_extremes(preimage, parameter_width)
     return PHBSplineSpan(
         span_id=span_id,
         parameter_width=float(parameter_width),
@@ -438,6 +521,8 @@ def compile_span(
         length=length,
         regularity_lower=float(regularity_lower),
         regularity_upper=float(regularity_upper),
+        kappa_min=float(kappa_min),
+        kappa_max=float(kappa_max),
         lut_u=_readonly(lut_u),
         lut_s=_readonly(lut_s),
     )
@@ -447,6 +532,7 @@ __all__ = [
     "PHBSplineSpan",
     "certify_nonzero",
     "compile_span",
+    "curvature_extremes",
     "de_casteljau",
     "derivative_controls",
     "sampled_min_norm",

@@ -72,6 +72,10 @@ from ph_spline import CubicPHSplineClosed
 
 loop = CubicPHSplineClosed([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]])
 
+# Exact minimal curvature radii: offsets are cusp-free for
+# -rho_right < d < rho_left (closed form, O(1) after construction).
+rho_left, rho_right = loop.min_curvature_radii
+
 # Exact parallel curve as a verified rational quintic NURBS.
 # Positive distance is to the traversal-left side; zero and negative work too.
 ring = loop.offset(0.25)
@@ -106,10 +110,14 @@ not a decoration: CNC cutter-radius compensation, stepover and pocketing
 plans, wire-EDM and laser kerf allowance, trajectory optimization under
 clearance constraints, robot and AGV safety corridors, boundary-layer mesh
 inflation, mold shrink compensation, coverage and buffer zoning, tolerance
-bands, and lossless export to CAD/CAM as an ordinary NURBS. The
+bands, and lossless export to CAD/CAM as an ordinary NURBS. Both families
+also report `min_curvature_radii`, the exact smallest left/right curvature
+radii: offsets are cusp-free precisely for `-rho_right < d < rho_left`. The
 [`examples/cubic_offset`](examples/cubic_offset) and
 [`examples/cubic_closed_offset`](examples/cubic_closed_offset) galleries
-render 64 verified offset studies across these domains.
+render 64 verified offset studies across these domains, and
+[`examples/min_radii`](examples/min_radii) shows the cusp onset arriving
+exactly at the reported radii for all four spline varieties.
 
 ### Background
 
@@ -210,7 +218,9 @@ curve = PHBSplineOpen(
 # Analytic distance access is retained at variable degree.
 midpoint = curve.point_at_length(0.5 * curve.length)
 
-# Exact parallel curve as a read-only rational NURBS of degree 4m + 1.
+# Exact parallel curve as a read-only rational NURBS of degree 4m + 1;
+# min_curvature_radii bounds the cusp-free distance range on each side.
+rho_left, rho_right = curve.min_curvature_radii
 shell = curve.offset(0.2)
 assert shell.degree == 4 * curve.preimage_degree + 1
 assert np.allclose(shell.point(0.4), curve.point(0.4) + 0.2 * curve.normal(0.4))
@@ -414,6 +424,7 @@ recompilation as total-size-independent execution.
     <tr><td><code>parameter_at_length(s: Real) -&gt; float</code></td><td>Parameter at travelled length <code>s</code>.</td></tr>
     <tr><td><code>point_at_length(s: Real) -&gt; NDArray</code></td><td>Position at travelled length <code>s</code>.</td></tr>
     <tr><td><code>offset(distance: Real) -&gt; NURBSHandle</code></td><td>Exact parallel curve as a verified rational quintic NURBS.</td></tr>
+    <tr><td><code>.min_curvature_radii -&gt; tuple[float, float]</code></td><td>Exact smallest left/right curvature radii; cusp-free offset range.</td></tr>
   </tbody>
 </table>
 
@@ -442,6 +453,7 @@ recompilation as total-size-independent execution.
     <tr><td><code>.verified_continuity -&gt; ContinuitySpec</code></td><td>Independently verified orders.</td></tr>
     <tr><td><code>.length -&gt; float</code></td><td>Total arc length.</td></tr>
     <tr><td><code>.length_coordinate -&gt; LengthCoordinate</code></td><td>Extended-form total length.</td></tr>
+    <tr><td><code>.min_curvature_radii -&gt; tuple[float, float]</code></td><td>Certified smallest left/right curvature radii; cusp-free offset range.</td></tr>
     <tr><td><code>.version -&gt; int</code></td><td>State version incremented by each commit.</td></tr>
     <tr><td><code>.diagnostics -&gt; BuildDiagnostics</code></td><td>Latest construction and verification metrics.</td></tr>
     <tr><td><code>.last_edit_report -&gt; Optional[EditReport]</code></td><td>Most recent committed edit report.</td></tr>
