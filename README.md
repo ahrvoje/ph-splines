@@ -14,7 +14,9 @@ convenient, efficient and robust without demanding numerical quadrature.
 Both families also expose **exact parallel offsets**: `curve.offset(d)` compiles
 the true offset curve as a verified read-only rational NURBS, with no sampling
 or fitting. This exact rationality of offsets is a defining PH property that
-ordinary polynomial splines do not have.
+ordinary polynomial splines do not have. Offset handles carry the same
+distance-query API as their sources
+([section 3](#3-offset-distance-queries)).
 
 ## 1. Cubic PH Spline
 
@@ -82,6 +84,13 @@ ring = loop.offset(0.25)
 assert ring.degree == 5 and ring.domain == (0.0, 1.0) and ring.closed
 u = 0.37
 assert np.allclose(ring.point(u), loop.point(u) + 0.25 * loop.normal(u))
+
+# Distance queries measure travel along the offset locus itself, from a
+# verified elementary closed form (correctly rounded, never quadrature).
+L = ring.length                       # exact total offset length, O(1)
+s = ring.arc_length(u)                # distance from ring.point(0) to point(u)
+assert ring.parameter_at_length(s) == u
+mid = ring.point_at_length(0.5 * L)   # halfway along the offset ring
 ```
 
 ### Gallery
@@ -225,6 +234,9 @@ shell = curve.offset(0.2)
 assert shell.degree == 4 * curve.preimage_degree + 1
 assert np.allclose(shell.point(0.4), curve.point(0.4) + 0.2 * curve.normal(0.4))
 
+# The offset handle answers distance queries about its own locus.
+shell_mid = shell.point_at_length(0.5 * shell.length)
+
 # Handles survive insertion and index shifts; edits commit atomically.
 handle = curve.point_handle(2)
 report = curve.move_point(handle, [2.1, -0.9])
@@ -359,6 +371,109 @@ recompilation as total-size-independent execution.
 | 10,000 | G2 | 59.50 ms | 92.92 ms | 91.28 ms | 10/10/10 |
 | 10,000 | G4 | 60.69 ms | 94.32 ms | 93.19 ms | 14/14/14 |
 | 10,000 | G8 | 69.95 ms | 103.73 ms | 101.58 ms | 22/22/22 |
+
+## 3. Offset distance queries
+
+Every `NURBSHandle` returned by `offset(d)` measures distance **along the
+offset locus itself**, in source traversal order, exactly as specified in
+`OffsetNURBS_Distance_Specification.md`:
+
+```python
+ring = curve.offset(d)
+
+ring.length                  # total traversal length, O(1), correctly rounded
+ring.arc_length(u)           # distance from point(0) to point(u)
+ring.parameter_at_length(s)  # unique u with arc_length(u) == s
+ring.point_at_length(s)      # point(parameter_at_length(s))
+ring.cusps                   # certified OffsetCusp(parameter, multiplicity)
+```
+
+A generic rational NURBS has no elementary arc length. These handles do
+because they are exact parallels of PH splines: at `offset(d)` construction
+the package captures the generating PH preimage and compiles a verified
+*metric certificate* - constant-sign metric cells split at certified offset
+cusps, compiled Bernstein antiderivatives for the polynomial source-length
+term, and one continuous-branch `atan2` term per cell for the turning
+contribution, so distance evaluation is a finite closed form. Cusps,
+reversals and self-intersections of the true parallel curve stay in the
+measurement; nothing is trimmed, sampled or fitted, and quadrature is never
+used.
+
+Reliability is certificate-based rather than tolerance-based:
+
+- construction runs in exact rational arithmetic; cusp roots are isolated
+  completely (with multiplicities) by exact Descartes bisection with an
+  exact square-free fallback, and every coefficient identity is re-derived
+  through an independent second pipeline before publication;
+- ordinary queries run in compensated double-double arithmetic against the
+  compiled cell data, and a result is returned only when its certified error
+  enclosure determines the correctly rounded value - which also makes public
+  `arc_length` monotone by construction;
+- an undecided enclosure escalates through a certified integer ladder (256
+  to 4,096 bits); exhausting the documented cap raises
+  `NumericalPrecisionError` instead of returning an unverified value;
+- `parameter_at_length` is a bracketed, safeguarded Newton solve on the
+  elementary distance function with a residual acceptance gate, a
+  cusp-asymptotic seed law near stalls, and an ordered-binary64
+  best-representable-parameter fallback, so inverse queries stay certified
+  even at cusps where the parameter itself is ill-conditioned.
+
+The test suite verifies `length` and `arc_length` results bit-for-bit
+against an independent 300-1,000-bit `mpmath` oracle across all four source
+families, including interior cusps, full speed reversals, tangency and
+near-double-root offsets, source scales from 1e-150 to 1e150, subnormal
+inverse targets, and offsets that cancel more than 30 bits between the
+source-length and turning terms.
+
+### Gallery: distance queries on the offset locus
+
+128 rendered studies - 32 per source family in
+[cubic](examples/cubic_offset_distance/),
+[closed cubic](examples/cubic_closed_offset_distance/),
+[B-spline](examples/bspline_offset_distance/) and
+[closed B-spline](examples/bspline_closed_offset_distance/) form - place
+every distance station with `point_at_length` measured along the offset
+locus itself. Each image is generated only after the case re-verifies its
+offset geometry and its distance API against round-trip residual gates.
+
+| | |
+|---|---|
+| ![Hyperloop transition spiral](examples/bspline_offset_distance/022_hyperloop_transition_spiral.png) | ![Velodrome measurement line](examples/bspline_closed_offset_distance/025_velodrome_measurement_line.png) |
+| *Clothoid guideway easement: jerk gates at equal guideway travel on a degree-17 rational offset.* | *UCI measurement line offset from the track datum, timing loops by exact lap distance.* |
+
+### Benchmarks: offset distance and inverse distance
+
+`python benchmarks/benchmark_offset_distance.py` reports per-query
+percentiles over 10,000 deterministic seeded queries per operation, on the
+same Windows 11 / Python 3.14.6 / NumPy 2.5.1 host as the tables above.
+
+| handle | query | median | p95 | worst |
+|:--|:--|--:|--:|--:|
+| cubic offset, 99 spans | `length` | 0.1 µs | 0.1 µs | 46.8 µs |
+| | `arc_length` | 10.8 µs | 11.3 µs | 72.4 µs |
+| | `parameter_at_length` | 45.3 µs | 48.7 µs | 394.9 µs |
+| | `point_at_length` | 77.7 µs | 87.3 µs | 3.8 ms |
+| cubic closed offset, 8 interior cusps | `arc_length` | 10.8 µs | 11.3 µs | 268.5 µs |
+| | `parameter_at_length` | 65.1 µs | 69.3 µs | 459.9 µs |
+| | `point_at_length` | 93.9 µs | 112.2 µs | 515.9 µs |
+| PH B-spline offset, degree 9 | `arc_length` | 10.9 µs | 12.5 µs | 287.8 µs |
+| | `parameter_at_length` | 46.7 µs | 53.9 µs | 385.3 µs |
+| | `point_at_length` | 126.5 µs | 148.4 µs | 514.2 µs |
+
+Query cost stays flat with source size, as required by the near-logarithmic
+lookup contract; the certified metric raises offset construction cost to
+about 0.9 ms per span:
+
+| spans | offset construction | `arc_length` median | `parameter_at_length` median |
+|--:|--:|--:|--:|
+| 10 | 0.009 s | 10.7 µs | 44.5 µs |
+| 100 | 0.087 s | 10.4 µs | 43.5 µs |
+| 1,000 | 0.873 s | 9.6 µs | 37.8 µs |
+| 10,000 | 8.822 s | 10.5 µs | 30.6 µs |
+
+The certified high-precision fallback never fired in these runs
+(0 in 160,000 queries); the benchmark script reports its incidence so a
+latency profile can never silently hide it.
 
 ## References
 
@@ -527,7 +642,8 @@ mutates, keeps no live back-reference, and stays unchanged when a mutable
 source is edited later. Cusps and self-intersections of the true parallel
 curve are represented exactly, never trimmed. Construction either passes a
 full independent verification (structure, coefficient identities, sampled
-geometry) or raises `OffsetConstructionError`.
+geometry, and the complete distance metric certificate) or raises
+`OffsetConstructionError`; geometry and metric succeed or fail atomically.
 
 <table width="100%">
   <thead>
@@ -546,5 +662,17 @@ geometry) or raises `OffsetConstructionError`.
     <tr><td><code>.domain -&gt; tuple[float, float]</code></td><td>Exactly <code>(0.0, 1.0)</code>; the source parameter is unchanged.</td></tr>
     <tr><td><code>.closed -&gt; bool</code></td><td>Whether the source (and seam values) are cyclic.</td></tr>
     <tr><td><code>point(u: Real) -&gt; NDArray[np.float64]</code></td><td>Homogeneous de Boor evaluation with one final division.</td></tr>
+    <tr><td><code>.length -&gt; float</code></td><td>Total traversal length of the offset locus; O(1), correctly rounded.</td></tr>
+    <tr><td><code>arc_length(u: Real) -&gt; float</code></td><td>Traversal distance from <code>point(0)</code> to <code>point(u)</code>; correctly rounded, exact endpoint identities.</td></tr>
+    <tr><td><code>parameter_at_length(s: Real) -&gt; float</code></td><td>Unique parameter with <code>arc_length(u) == s</code> for <code>s</code> in <code>[0, length]</code>; certified residual or best-representable-parameter acceptance.</td></tr>
+    <tr><td><code>point_at_length(s: Real) -&gt; NDArray[np.float64]</code></td><td>Identical to <code>point(parameter_at_length(s))</code>.</td></tr>
+    <tr><td><code>.cusps -&gt; tuple[OffsetCusp, ...]</code></td><td>Certified offset cusps: ascending <code>(parameter, multiplicity)</code> records within two ulps of the exact stationary parameters; odd multiplicity marks a direction reversal. Empty when cusp-free. O(1).</td></tr>
   </tbody>
 </table>
+
+Distance queries validate like their source counterparts: real scalars only,
+`u` in `[0, 1]` and `s` in `[0, length]` with a four-ulp endpoint clamp,
+`ParameterOutOfRangeError` / `ArcLengthOutOfRangeError` for material
+excursions, and typed `ArcLengthInversionError` / `NumericalPrecisionError`
+failures instead of unverified results. See
+[section 3](#3-offset-distance-queries) for the semantics and benchmarks.

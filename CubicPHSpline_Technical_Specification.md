@@ -185,8 +185,8 @@ All returned arrays shall be newly allocated or read-only. A caller must not be 
 ## 2.4 Read-only NURBS handle
 
 `curve.offset(distance)` SHALL return the same public `NURBSHandle` type for
-the cubic and PH B-spline families. The handle has only the following
-inspection and point-query interface:
+the cubic and PH B-spline families. The handle has the following inspection,
+point-query, and common PH distance-query interface:
 
 ```python
 class NURBSHandle:
@@ -214,12 +214,26 @@ class NURBSHandle:
     @property
     def closed(self) -> bool: ...
 
+    @property
+    def length(self) -> float: ...
+
     def point(self, u: Real) -> NDArray[np.float64]: ...
+
+    def arc_length(self, u: Real) -> float: ...
+
+    def parameter_at_length(self, s: Real) -> float: ...
+
+    def point_at_length(self, s: Real) -> NDArray[np.float64]: ...
+
+    @property
+    def cusps(self) -> tuple[OffsetCusp, ...]: ...
 ```
 
-The interface SHALL NOT expose mutation, editing, derivatives, arc-length
-queries, fitting controls, or a back-reference that can mutate the source
-spline. `domain` is exactly `(0.0, 1.0)`. `knots` has shape
+The interface SHALL NOT expose mutation, editing, derivatives, fitting
+controls, or a back-reference that can mutate the source spline. `domain` is
+exactly `(0.0, 1.0)`. The four distance members are specified normatively in
+`OffsetNURBS_Distance_Specification.md`; that addendum supersedes the earlier
+point-only restriction. `knots` has shape
 `(num_control_points + degree + 1,)`, `control_points` has shape
 `(num_control_points, 2)`, and `weights` has shape
 `(num_control_points,)`. All three arrays contain finite binary64 values and
@@ -227,7 +241,9 @@ are returned as read-only snapshots. Every weight is strictly positive.
 
 The handle is a snapshot. It remains valid and unchanged even if the source
 is a mutable `PHBSpline` that is edited later. Section 11.7 defines the
-normative construction and evaluation rules.
+normative geometric construction and point-evaluation rules. The offset
+distance addendum defines metric construction, elementary length evaluation,
+and guarded inversion.
 
 # 3. Public parameter convention
 
@@ -1541,8 +1557,11 @@ Thus the offset has a cusp where $1-d\kappa=0$ and can self-intersect for
 large $|d|$. These are properties of the exact parallel curve. Construction
 SHALL retain them and SHALL NOT reject, trim, smooth, or join them. They are
 not rational poles: the NURBS denominator is the strictly positive source
-speed and is independent of $d$. Trimming and cusp classification are outside
-the `NURBSHandle` interface.
+speed and is independent of $d$. Trimming is outside the `NURBSHandle`
+interface; the certified cusp parameters and multiplicities established
+during distance-metric construction are exposed by the read-only `cusps`
+property (`OffsetCusp(parameter, multiplicity)` records, ascending, within
+two ulps of the exact stationary parameters).
 
 ## 11.8 Minimal curvature radii
 

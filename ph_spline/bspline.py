@@ -1108,6 +1108,12 @@ class PHBSpline(PHSpline):
             closed=closed,
             join_tolerance=join_tolerance,
             oracle=oracle,
+            # Distance metric certificate: the compiled complex Bernstein
+            # preimage and stored local parameter width of every span.
+            metric_preimages=[
+                [complex(z) for z in kernel.preimage] for kernel in spans
+            ],
+            metric_widths=[float(kernel.parameter_width) for kernel in spans],
         )
 
     # -- explicit batches -------------------------------------------------

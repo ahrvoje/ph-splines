@@ -30,10 +30,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ph_spline.exceptions import (
+    ArcLengthOutOfRangeError,
     NumericalPrecisionError,
     OffsetConstructionError,
     ParameterOutOfRangeError,
 )
+from ph_spline.offset_metric import build_offset_metric, rebuild_offset_metric
 
 __all__ = ["NURBSHandle", "build_offset_handle", "validate_offset_distance"]
 
@@ -297,6 +299,7 @@ class NURBSHandle:
         "_frozen",
         "_homogeneous",
         "_knots",
+        "_metric",
         "_num_spans",
         "_points",
         "_weights",
@@ -311,6 +314,7 @@ class NURBSHandle:
         weights: NDArray[np.float64],
         num_spans: int,
         closed: bool,
+        metric=None,
         _token: object = None,
     ) -> None:
         if _token is not _VERIFIED:
@@ -322,6 +326,7 @@ class NURBSHandle:
         self._degree = int(degree)
         self._num_spans = int(num_spans)
         self._closed = bool(closed)
+        self._metric = metric
         knots_arr = np.array(knots, dtype=np.float64, copy=True)
         points_arr = np.array(control_points, dtype=np.float64, copy=True)
         weights_arr = np.array(weights, dtype=np.float64, copy=True)
@@ -366,11 +371,18 @@ class NURBSHandle:
     # inconsistent handle.
 
     def __getstate__(self) -> dict:
-        return {
+        state = {
             name: getattr(self, name)
             for name in NURBSHandle.__slots__
-            if name != "_homogeneous"
+            if name not in ("_homogeneous", "_metric")
         }
+        # The metric certificate is serialized as its captured raw source
+        # state; restoration rebuilds and re-verifies the complete
+        # certificate (distance spec 6.1).
+        state["_metric_state"] = (
+            None if self._metric is None else self._metric.state()
+        )
+        return state
 
     def __setstate__(self, state: dict) -> None:
         object.__setattr__(self, "_frozen", False)
@@ -388,6 +400,12 @@ class NURBSHandle:
         homogeneous[:, 2] = arrays["_weights"]
         homogeneous.setflags(write=False)
         object.__setattr__(self, "_homogeneous", homogeneous)
+        metric_state = state.get("_metric_state")
+        object.__setattr__(
+            self,
+            "_metric",
+            None if metric_state is None else rebuild_offset_metric(metric_state),
+        )
         _verify_structure(
             degree=self._degree,
             knots=self._knots,
@@ -471,6 +489,125 @@ class NURBSHandle:
                 bound="<= 1",
             )
         return u
+
+    # -- distance queries (OffsetNURBS_Distance_Specification) -----------
+
+    def _require_metric(self):
+        metric = self._metric
+        if metric is None:
+            raise OffsetConstructionError(
+                "This handle carries no verified distance certificate; "
+                "distance queries are defined only for handles produced "
+                "by offset() of a PH spline",
+                operation="offset-metric",
+                quantity="metric certificate",
+            )
+        return metric
+
+    def _validate_s(self, value: object) -> float:
+        """Validate an arc-length scalar (distance spec 3.5).
+
+        Accepts real scalars in ``[0, length]`` with a four-ulp endpoint
+        clamp; NaN, infinities, and material excursions raise
+        :class:`ArcLengthOutOfRangeError`.
+        """
+        if isinstance(value, (bool, np.bool_)):
+            raise TypeError("s must be a real scalar, not a Boolean")
+        if not isinstance(value, numbers.Real):
+            raise TypeError(
+                f"s must be a real scalar, not {type(value).__name__}"
+            )
+        s = float(value)
+        if math.isnan(s):
+            raise ArcLengthOutOfRangeError(
+                "Arc length s must not be NaN", quantity="s", value=s
+            )
+        total = self._metric.length
+        if math.isinf(s):
+            raise ArcLengthOutOfRangeError(
+                "Arc length s must be finite",
+                quantity="s",
+                value=s,
+                bound=f"[0, {total!r}]",
+            )
+        slack = _ULP_SLACK * math.ulp(total)
+        if s < 0.0:
+            if s >= -slack:
+                return 0.0
+            raise ArcLengthOutOfRangeError(
+                "Arc length s is below the domain [0, length]",
+                quantity="s",
+                value=s,
+                bound=">= 0",
+            )
+        if s > total:
+            if s <= total + slack:
+                return total
+            raise ArcLengthOutOfRangeError(
+                "Arc length s is above the domain [0, length]",
+                quantity="s",
+                value=s,
+                bound=f"<= {total!r}",
+            )
+        return s
+
+    @property
+    def length(self) -> float:
+        """Total unsigned traversal length of the offset locus.
+
+        Correctly rounded value of the exact-reference length, computed
+        during verified construction and returned in O(1).
+        """
+        return self._require_metric().length
+
+    @property
+    def cusps(self) -> tuple:
+        """Certified offset cusps as ``OffsetCusp(parameter, multiplicity)``.
+
+        Ascending global parameters of every zero-speed point of the
+        offset locus, computed at construction by complete exact-rational
+        root isolation of the cusp polynomial and refined to within two
+        ulps of the exact stationary parameter.  Odd multiplicity marks a
+        direction reversal, even multiplicity a tangential zero-speed
+        graze; sub-ulp root pairs coalesce into one record.  Empty for
+        cusp-free offsets (in particular for ``d == 0``).  O(1) after
+        construction.
+        """
+        return self._require_metric().cusps
+
+    def arc_length(self, u: object) -> float:
+        """Unsigned traversal distance from ``point(0)`` to ``point(u)``.
+
+        The result is the correctly rounded exact-reference value (which
+        satisfies the faithful-rounding contract of the distance
+        specification, section 11.1) with exact endpoint identities
+        ``arc_length(0.0) == 0.0`` and ``arc_length(1.0) == length``.
+        """
+        metric = self._require_metric()
+        return metric.arc_length(self._validate_u(u))
+
+    def parameter_at_length(self, s: object) -> float:
+        """Unique parameter ``u`` with ``arc_length(u) == s``.
+
+        Solved from the elementary offset-distance function by a
+        safeguarded bracketed Newton iteration with a certified residual
+        acceptance gate, falling back to the best-representable-parameter
+        search of the distance specification (section 10).
+        """
+        metric = self._require_metric()
+        return metric.parameter_at_length(self._validate_s(s))
+
+    def point_at_length(self, s: object) -> NDArray[np.float64]:
+        """Point reached after travelling ``s`` along the offset locus.
+
+        Semantically identical to
+        ``point(parameter_at_length(s))``; the inverse and the verified
+        rational evaluation share one call chain, so the two-call
+        expression returns the same coordinates for the same accepted
+        argument.
+        """
+        metric = self._require_metric()
+        return self.point(metric.parameter_at_length(self._validate_s(s)))
 
     def point(self, u: object) -> NDArray[np.float64]:
         """Rational point by homogeneous de Boor and one final division."""
@@ -633,6 +770,8 @@ def build_offset_handle(
     closed: bool,
     join_tolerance: float,
     oracle,
+    metric_preimages: list | None = None,
+    metric_widths: list | None = None,
 ) -> NURBSHandle:
     """Construct and fully verify one exact offset NURBS handle.
 
@@ -643,6 +782,14 @@ def build_offset_handle(
     independent derivative check.  ``oracle(u)`` returns the source point
     and left unit normal in user coordinates and must not depend on any
     state that a later source edit can change.
+
+    When ``metric_preimages`` (per-span complex Bernstein preimages) and
+    ``metric_widths`` (per-span local parameter-width factors) are given,
+    the complete distance metric certificate of
+    ``OffsetNURBS_Distance_Specification.md`` is built and verified
+    before the handle is published, so geometry and metric succeed or
+    fail atomically.  Handles built without metric data (internal test
+    pipelines) reject distance queries.
 
     The function either returns a completely verified handle or raises
     :class:`OffsetConstructionError`; no partial handle can escape.
@@ -875,6 +1022,18 @@ def build_offset_handle(
             distance=distance,
         )
 
+    # -- distance metric certificate (atomic with geometry) --------------
+    metric = None
+    if metric_preimages is not None:
+        metric = build_offset_metric(
+            span_preimages=metric_preimages,
+            span_widths=metric_widths,
+            breakpoints=[float(b) for b in breakpoints],
+            distance=distance,
+            scale=scale,
+            closed=closed,
+        )
+
     handle = NURBSHandle(
         degree=q,
         knots=knots,
@@ -882,6 +1041,7 @@ def build_offset_handle(
         weights=weights,
         num_spans=span_count,
         closed=closed,
+        metric=metric,
         _token=_VERIFIED,
     )
 

@@ -31,6 +31,7 @@ from ph_spline.bspline_types import (
 )
 from ph_spline.cubic import CubicPHSpline, CubicPHSplineClosed, CubicPHSplineOpen
 from ph_spline.nurbs import NURBSHandle
+from ph_spline.offset_metric import OffsetCusp
 from ph_spline.exceptions import (
     ArcLengthInversionError,
     ArcLengthOutOfRangeError,
@@ -71,7 +72,7 @@ from ph_spline.exceptions import (
     UndefinedPrincipalNormalError,
 )
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 __all__ = [
     "ArcLengthInversionError",
@@ -113,6 +114,7 @@ __all__ = [
     "NumericalPrecisionError",
     "NURBSHandle",
     "OffsetConstructionError",
+    "OffsetCusp",
     "PHBSpline",
     "PHBSplineClosed",
     "PHBSplineEditTransaction",

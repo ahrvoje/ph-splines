@@ -938,13 +938,27 @@ class NURBSHandle:
     @property
     def closed(self) -> bool: ...
 
+    @property
+    def length(self) -> float: ...
+
     def point(self, u: Real) -> NDArray[np.float64]: ...
+
+    def arc_length(self, u: Real) -> float: ...
+
+    def parameter_at_length(self, s: Real) -> float: ...
+
+    def point_at_length(self, s: Real) -> NDArray[np.float64]: ...
+
+    @property
+    def cusps(self) -> tuple[OffsetCusp, ...]: ...
 ```
 
 This is deliberately a small read-only interface. It SHALL NOT expose edits,
-fitting, derivatives, arc-length operations, control-point setters, or source
-mutation. `domain` is exactly `(0.0, 1.0)`. The arrays have these structural
-contracts:
+fitting, derivatives, control-point setters, or source mutation. The four
+distance members are specified normatively in
+`OffsetNURBS_Distance_Specification.md`; that addendum supersedes the earlier
+point-only restriction. `domain` is exactly `(0.0, 1.0)`. The arrays have
+these structural contracts:
 
 ```text
 knots.shape == (num_control_points + degree + 1,)
@@ -2142,9 +2156,12 @@ $$
 The exact offset has a cusp where $1-d\kappa=0$ and can self-intersect for
 large $|d|$. These are not construction failures and SHALL NOT be trimmed,
 smoothed, joined, or rejected. A cusp is not a denominator pole: the NURBS
-denominator is the strictly positive source speed. Cusp classification,
-trimming, and planar-region Boolean operations are outside the minimal
-`NURBSHandle` interface.
+denominator is the strictly positive source speed. Trimming and
+planar-region Boolean operations are outside the minimal `NURBSHandle`
+interface; the certified cusp parameters and multiplicities established
+during distance-metric construction are exposed by the read-only `cusps`
+property (`OffsetCusp(parameter, multiplicity)` records, ascending, within
+two ulps of the exact stationary parameters).
 
 ## 15.7 Minimal curvature radii
 

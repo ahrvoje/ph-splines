@@ -961,6 +961,10 @@ class CubicPHSpline(PHSpline):
             closed=self.closed,
             join_tolerance=EPS_TANGENT,
             oracle=oracle,
+            # Distance metric certificate: each cubic span has the linear
+            # preimage w(t) = (1-t) w0 + t w1 and unit local width.
+            metric_preimages=[[seg.w0, seg.w1] for seg in segments],
+            metric_widths=[1.0] * len(segments),
         )
 
     # ------------------------------------------------------------------
