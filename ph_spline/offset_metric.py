@@ -1459,6 +1459,53 @@ class OffsetMetric:
         d_lo, d_hi = _certified_cell_distance(self, cell, x, prec)
         return p_lo + d_lo, p_hi + d_hi
 
+    # -- read-only views for the area addendum ---------------------------
+    #
+    # ``ClosedSpline_Area_Specification.md`` (section 12.2) requires the
+    # metric to expose its exact phase cells and exact source-speed state
+    # without duplicating any algorithm.  Both views return captured
+    # immutable construction data; they never compute anything.
+
+    def exact_source_state(self):
+        """Exact captured source state ``(spans, H, d, closed)``.
+
+        ``spans`` is the ordered tuple of per-span exact certificates
+        (rational preimages ``wre``/``wim``, speed coefficients ``rho``,
+        width ``h`` and preimage degree ``m``), ``H`` the exact rational
+        normalization scale, ``d`` the accepted signed offset distance and
+        ``closed`` the verified source topology.
+        """
+        return tuple(self._spans), self._H, self._d, self._closed
+
+    def fill_cells(self):
+        """All verified metric cells as ``(span, a_loc, b_loc, eta)``.
+
+        ``eta`` is the certified constant sign of the cusp polynomial
+        ``G`` on the cell, which is also the sign factor between the
+        offset tangent direction and ``w**2``.  Captured construction
+        data only; nothing is computed.
+        """
+        return tuple(
+            (cell.span, cell.a_loc, cell.b_loc, cell.eta)
+            for cell in self._cells
+        )
+
+    def phase_cells(self):
+        """Verified nonconstant-phase cells as ``(span, a_loc, b_loc)``.
+
+        Each triple names one half-plane-certified metric cell by its span
+        index and exact rational local bounds; the continuous preimage
+        phase change across such a cell is provably below ``pi/2`` in
+        magnitude, so a principal ``atan2`` of the exact endpoint
+        preimages equals the continuous increment.  Constant-phase spans
+        contribute no cells.
+        """
+        return tuple(
+            (cell.span, cell.a_loc, cell.b_loc)
+            for cell in self._cells
+            if cell.angle
+        )
+
     # -- serialization support -------------------------------------------
 
     def state(self) -> dict:

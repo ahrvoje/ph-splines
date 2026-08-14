@@ -214,7 +214,10 @@ The implementation plan is based on a direct review of the repository source and
 The package top-level `ph_spline.__init__` SHALL export `PHSpline`, the
 abstract family bases `CubicPHSpline` and `PHBSpline`, and all four sibling
 topology classes `CubicPHSplineOpen`, `CubicPHSplineClosed`, `PHBSplineOpen`,
-`PHBSplineClosed`, and the common `NURBSHandle`. No open/closed pair and no cubic/B-spline pair may
+`PHBSplineClosed`, and the common `NURBSHandle`. Amendment
+(`ClosedSpline_Area_Specification.md`): the closed-topology subtypes
+`ClosedNURBSHandle` and `PHBSplineClosedSnapshot` are also exported; closed
+`offset(...)` and `snapshot()` return them. No open/closed pair and no cubic/B-spline pair may
 inherit from one another; concrete classes inherit only their own family base.
 
 # 3. Mathematical model

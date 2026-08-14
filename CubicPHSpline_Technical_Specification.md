@@ -177,7 +177,7 @@ curve.min_curvature_radii
 | `arc_length` | Python `float` |
 | `parameter_at_length` | Python `float` |
 | `point_at_length` | NumPy `float64` array of shape `(2,)` |
-| `offset` | immutable `NURBSHandle` |
+| `offset` | immutable `NURBSHandle` (the `ClosedNURBSHandle` subtype from `CubicPHSplineClosed`; see `ClosedSpline_Area_Specification.md`) |
 | `min_curvature_radii` | `tuple[float, float]`; each entry finite positive or `math.inf` |
 
 All returned arrays shall be newly allocated or read-only. A caller must not be able to mutate the spline through a returned object.
@@ -185,8 +185,12 @@ All returned arrays shall be newly allocated or read-only. A caller must not be 
 ## 2.4 Read-only NURBS handle
 
 `curve.offset(distance)` SHALL return the same public `NURBSHandle` type for
-the cubic and PH B-spline families. The handle has the following inspection,
-point-query, and common PH distance-query interface:
+the cubic and PH B-spline families. Amendment
+(`ClosedSpline_Area_Specification.md`): closed sources return the
+`ClosedNURBSHandle` subtype, which adds the closed-only `signed_area` and
+`area` properties; the common interface below is unchanged. The handle has
+the following inspection, point-query, and common PH distance-query
+interface:
 
 ```python
 class NURBSHandle:

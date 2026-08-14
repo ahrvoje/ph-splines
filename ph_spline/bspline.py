@@ -51,7 +51,14 @@ from ph_spline.exceptions import (
     TransactionError,
     UndefinedPrincipalNormalError,
 )
+from ph_spline.area import (
+    source_signed_area,
+    span_contribution_ball,
+    statistics as _area_statistics,
+)
+from ph_spline.fill_area import fill_area_source
 from ph_spline.nurbs import (
+    ClosedNURBSHandle,
     NURBSHandle,
     build_offset_handle,
     validate_offset_distance,
@@ -339,6 +346,16 @@ class PHBSpline(PHSpline):
             f"degree={self.degree}, {'closed' if self.closed else 'open'}, "
             f"version={self.version})"
         )
+
+    def __getstate__(self) -> dict:
+        # Area caches are derived, nonauthoritative data and are omitted
+        # from serialized state; restoration rebuilds them lazily on the
+        # next query (area spec 11.4).
+        state = dict(self.__dict__)
+        state.pop("_area_cache", None)
+        state.pop("_area_span_cache", None)
+        state.pop("_fill_area_cache", None)
+        return state
 
     # -- required properties ---------------------------------------------
 
@@ -1531,6 +1548,114 @@ class PHBSplineClosed(PHBSpline):
     def closed(self) -> bool:
         return True
 
+    # -- closed-topology signed area (ClosedSpline_Area_Specification) ----
+
+    @property
+    def signed_area(self) -> float:
+        """Winding-weighted algebraic area ``(1/2) oint (x dy - y dx)``.
+
+        Correctly rounded analytic Bernstein coefficient sum over the
+        committed normalized span positions with cyclic residual join
+        closure; counterclockwise traversal is positive.  Lazy per
+        committed version: the first query after an edit recomputes only
+        the replaced span contributions and O(1) join terms, and repeated
+        queries on one version return the cached scalar.
+        """
+        version = self._version
+        state = self._state
+        cached = self.__dict__.get("_area_cache")
+        if cached is not None and cached[0] == version:
+            return cached[1]
+        value = self._compute_signed_area(state)
+        if self._version == version and self._state is state:
+            self.__dict__["_area_cache"] = (version, value)
+        return value
+
+    @property
+    def area(self) -> float:
+        """Nonnegative magnitude ``abs(signed_area)``."""
+        return abs(self.signed_area)
+
+    @property
+    def fill_area(self) -> float:
+        """Nonzero-winding fill area of the enclosed region.
+
+        The Lebesgue measure of the set of points the curve winds about a
+        nonzero number of times: the "physical" enclosed area of a
+        self-intersecting cycle.  A curve certified free of
+        self-intersections returns bitwise ``area``; otherwise the locus
+        is decomposed at its certified transversal crossings
+        (``ClosedSpline_FillArea_Specification.md``).  Lazy per committed
+        version, O(1) on repeated queries.
+        """
+        version = self._version
+        state = self._state
+        cached = self.__dict__.get("_fill_area_cache")
+        if cached is not None and cached[0] == version:
+            return cached[1]
+        area_value = self.area
+        value = fill_area_source(
+            [
+                np.column_stack((span.position.real, span.position.imag))
+                for span in state.spans
+            ],
+            [span.preimage for span in state.spans],
+            [span.parameter_width for span in state.spans],
+            float(state.scale),
+            area_value,
+        )
+        if self._version == version and self._state is state:
+            self.__dict__["_fill_area_cache"] = (version, value)
+        return value
+
+    def _compute_signed_area(self, state: PHBSplineBuildState) -> float:
+        """Area of one captured state with per-span contribution reuse.
+
+        The private per-span cache is keyed by position-array identity plus
+        the normalization scale; entries hold a strong array reference and
+        are confirmed by object identity, so a recycled object id can never
+        alias.  The cache dictionary itself is copy-on-write: a fresh dict
+        is swapped in atomically and never mutated in place, which keeps
+        snapshot sharing safe (area spec 7.3 / 7.4).
+        """
+        scale = float(state.scale)
+        old_cache = self.__dict__.get("_area_span_cache")
+        arrays = []
+        balls = []
+        new_cache: dict[int, tuple] = {}
+        for span in state.spans:
+            position = span.position
+            array = np.column_stack((position.real, position.imag))
+            arrays.append(array)
+            entry = None if old_cache is None else old_cache.get(id(position))
+            if (
+                entry is not None
+                and entry[0] is position
+                and entry[1] == scale
+            ):
+                _area_statistics["span_reused"] += 1
+            else:
+                entry = (position, scale, span_contribution_ball(array))
+            if entry[2] is not None:
+                new_cache[id(position)] = entry
+            balls.append(entry[2])
+        self.__dict__["_area_span_cache"] = new_cache
+        return source_signed_area(arrays, scale, span_balls=balls)
+
+    def offset(self, distance: numbers.Real) -> ClosedNURBSHandle:
+        """Exact closed parallel offset (see :meth:`PHBSpline.offset`).
+
+        The verified closed topology publishes the
+        :class:`~ph_spline.nurbs.ClosedNURBSHandle` subtype, which adds the
+        closed-only ``signed_area`` and ``area`` properties.
+        """
+        handle = super().offset(distance)
+        assert isinstance(handle, ClosedNURBSHandle)
+        return handle
+
+    def snapshot(self) -> PHBSplineClosedSnapshot:
+        return PHBSplineClosedSnapshot(self)
+
 
 class PHBSplineEditTransaction(AbstractContextManager["PHBSplineEditTransaction"]):
     """Draft multiple point edits and publish them with one verified rebuild."""
@@ -1678,9 +1803,37 @@ class PHBSplineSnapshot:
         return getattr(self._curve, name)
 
 
+class PHBSplineClosedSnapshot(PHBSplineSnapshot):
+    """Closed snapshot with the closed-topology area interface.
+
+    ``PHBSplineClosed.snapshot()`` returns this subtype, so only closed
+    snapshots expose ``signed_area`` and ``area``.  The captured frozen
+    state answers area queries against its own version forever; later
+    source edits never change it.  Cache sharing with the source is safe
+    because every area cache update is a copy-on-write binding swap into
+    the owner's own ``__dict__`` (area spec 7.4).
+    """
+
+    @property
+    def signed_area(self) -> float:
+        """Signed area of the captured version (see ``PHBSplineClosed``)."""
+        return self._curve.signed_area
+
+    @property
+    def area(self) -> float:
+        """Nonnegative magnitude ``abs(signed_area)``."""
+        return self._curve.area
+
+    @property
+    def fill_area(self) -> float:
+        """Fill area of the captured version (see ``PHBSplineClosed``)."""
+        return self._curve.fill_area
+
+
 __all__ = [
     "PHBSpline",
     "PHBSplineClosed",
+    "PHBSplineClosedSnapshot",
     "PHBSplineEditTransaction",
     "PHBSplineOpen",
     "PHBSplineSnapshot",

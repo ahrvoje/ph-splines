@@ -10,6 +10,7 @@ from ph_spline.base import PHSpline
 from ph_spline.bspline import (
     PHBSpline,
     PHBSplineClosed,
+    PHBSplineClosedSnapshot,
     PHBSplineEditTransaction,
     PHBSplineOpen,
     PHBSplineSnapshot,
@@ -30,7 +31,7 @@ from ph_spline.bspline_types import (
     PointHandle,
 )
 from ph_spline.cubic import CubicPHSpline, CubicPHSplineClosed, CubicPHSplineOpen
-from ph_spline.nurbs import NURBSHandle
+from ph_spline.nurbs import ClosedNURBSHandle, NURBSHandle
 from ph_spline.offset_metric import OffsetCusp
 from ph_spline.exceptions import (
     ArcLengthInversionError,
@@ -78,6 +79,7 @@ __all__ = [
     "ArcLengthInversionError",
     "ArcLengthOutOfRangeError",
     "BuildDiagnostics",
+    "ClosedNURBSHandle",
     "ConstructionConvergenceError",
     "ConstructionPolicy",
     "ContinuitySpec",
@@ -117,6 +119,7 @@ __all__ = [
     "OffsetCusp",
     "PHBSpline",
     "PHBSplineClosed",
+    "PHBSplineClosedSnapshot",
     "PHBSplineEditTransaction",
     "PHBSplineError",
     "PHBSplineOpen",

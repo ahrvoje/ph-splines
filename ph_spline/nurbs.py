@@ -29,6 +29,8 @@ from math import comb, fsum
 import numpy as np
 from numpy.typing import NDArray
 
+from ph_spline.area import OffsetAreaProvenance, offset_signed_area
+from ph_spline.fill_area import fill_area_offset
 from ph_spline.exceptions import (
     ArcLengthOutOfRangeError,
     NumericalPrecisionError,
@@ -37,7 +39,12 @@ from ph_spline.exceptions import (
 )
 from ph_spline.offset_metric import build_offset_metric, rebuild_offset_metric
 
-__all__ = ["NURBSHandle", "build_offset_handle", "validate_offset_distance"]
+__all__ = [
+    "ClosedNURBSHandle",
+    "NURBSHandle",
+    "build_offset_handle",
+    "validate_offset_distance",
+]
 
 _EPS = np.finfo(np.float64).eps
 
@@ -635,6 +642,96 @@ class NURBSHandle:
         return result
 
 
+class ClosedNURBSHandle(NURBSHandle):
+    """Closed exact-offset handle with the closed-topology area interface.
+
+    ``build_offset_handle`` instantiates this subtype exactly when the
+    verified source topology is closed, so only closed offsets carry
+    ``signed_area`` and ``area`` (``ClosedSpline_Area_Specification.md``,
+    section 3.2).  The handle owns an immutable area provenance record
+    (captured source position controls plus the shared exact metric
+    certificate); the first area query computes lazily and caches, so
+    repeated queries are O(1).
+    """
+
+    __slots__ = ("_area_cache", "_area_provenance", "_fill_area_cache")
+
+    def __init__(self, *, area_provenance: OffsetAreaProvenance, **kwargs) -> None:
+        object.__setattr__(self, "_area_provenance", area_provenance)
+        object.__setattr__(self, "_area_cache", None)
+        object.__setattr__(self, "_fill_area_cache", None)
+        super().__init__(**kwargs)
+
+    @property
+    def signed_area(self) -> float:
+        """Winding-weighted algebraic area of the exact offset locus.
+
+        Correctly rounded value of ``A_0 - d L_0 + pi nu d**2`` evaluated
+        from the captured exact source state: exact Bernstein source area,
+        exact PH source length and the certified integer tangent turning
+        number.  Counterclockwise traversal is positive; cusped and
+        self-intersecting offsets keep their defined algebraic value.
+        Lazy on first query, O(1) afterwards.
+        """
+        cached = self._area_cache
+        if cached is None:
+            cached = offset_signed_area(self._area_provenance)
+            object.__setattr__(self, "_area_cache", cached)
+        return cached
+
+    @property
+    def area(self) -> float:
+        """Nonnegative magnitude ``abs(signed_area)``."""
+        return abs(self.signed_area)
+
+    @property
+    def fill_area(self) -> float:
+        """Nonzero-winding fill area of the exact offset locus.
+
+        The "physical" enclosed area of the parallel curve: cusp loops
+        and self-intersections are decomposed at certified transversal
+        crossings of the exact-reference locus, and a cusp-free simple
+        offset returns bitwise ``area``
+        (``ClosedSpline_FillArea_Specification.md``).  Lazy on first
+        query, O(1) afterwards.
+        """
+        cached = self._fill_area_cache
+        if cached is None:
+            cached = fill_area_offset(self._area_provenance, self.area)
+            object.__setattr__(self, "_fill_area_cache", cached)
+        return cached
+
+    # -- copy and pickle protocols ----------------------------------------
+    #
+    # The area caches are derived state and are omitted; the provenance
+    # position controls travel with the handle, while its exact preimage
+    # state is shared with (and rebuilt through) the metric certificate.
+
+    def __getstate__(self) -> dict:
+        state = super().__getstate__()
+        state["_area_position_spans"] = tuple(
+            np.asarray(array) for array in self._area_provenance.position_spans
+        )
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        super().__setstate__(state)
+        try:
+            position_spans = state["_area_position_spans"]
+        except KeyError:
+            raise OffsetConstructionError(
+                "Closed offset payload lacks its area provenance",
+                operation="offset",
+                quantity="area provenance",
+            ) from None
+        provenance = OffsetAreaProvenance(
+            position_spans=position_spans, metric=self._metric
+        )
+        object.__setattr__(self, "_area_provenance", provenance)
+        object.__setattr__(self, "_area_cache", None)
+        object.__setattr__(self, "_fill_area_cache", None)
+
+
 def _deboor_homogeneous(
     knots: NDArray[np.float64],
     homogeneous: NDArray[np.float64],
@@ -1034,7 +1131,7 @@ def build_offset_handle(
             closed=closed,
         )
 
-    handle = NURBSHandle(
+    handle_kwargs = dict(
         degree=q,
         knots=knots,
         control_points=controls_user,
@@ -1044,6 +1141,17 @@ def build_offset_handle(
         metric=metric,
         _token=_VERIFIED,
     )
+    if closed and metric is not None:
+        # Closed verified topology: publish the closed subtype with its
+        # immutable area provenance (capture only; no area is evaluated).
+        handle = ClosedNURBSHandle(
+            area_provenance=OffsetAreaProvenance(
+                position_spans=span_controls, metric=metric
+            ),
+            **handle_kwargs,
+        )
+    else:
+        handle = NURBSHandle(**handle_kwargs)
 
     # -- independent post-publication checks through the public path -----
     for u in final_breaks:

@@ -46,8 +46,11 @@ from ph_spline.exceptions import (
     SplineConvergenceError,
     UndefinedPrincipalNormalError,
 )
+from ph_spline.area import source_signed_area
+from ph_spline.fill_area import fill_area_source
 from ph_spline.nonlinear import solve_closed_tangents, solve_internal_tangents
 from ph_spline.nurbs import (
+    ClosedNURBSHandle,
     NURBSHandle,
     build_offset_handle,
     validate_offset_distance,
@@ -1024,10 +1027,12 @@ class CubicPHSplineClosed(CubicPHSpline):
     and straight/curved transitions.
     """
 
-    __slots__ = ()
+    __slots__ = ("_area_cache", "_fill_area_cache")
 
     def __init__(self, points: PointSequence) -> None:
         object.__setattr__(self, "_frozen", False)
+        object.__setattr__(self, "_area_cache", None)
+        object.__setattr__(self, "_fill_area_cache", None)
         points = validate_points(points)
         try:
             geometry = analyze_closed_geometry(points)
@@ -1278,3 +1283,71 @@ class CubicPHSplineClosed(CubicPHSpline):
     @property
     def closed(self) -> bool:
         return True
+
+    # -- closed-topology signed area (ClosedSpline_Area_Specification) ----
+
+    @property
+    def signed_area(self) -> float:
+        """Winding-weighted algebraic area ``(1/2) oint (x dy - y dx)``.
+
+        Correctly rounded analytic Bernstein coefficient sum over the
+        stored normalized control nets with cyclic residual join closure;
+        counterclockwise traversal is positive and oppositely wound lobes
+        of a self-intersecting cycle cancel.  Lazy on first query, O(1)
+        afterwards.
+        """
+        cached = self._area_cache
+        if cached is None:
+            cached = source_signed_area(
+                [segment.ctrl for segment in self._segments], self._scale
+            )
+            object.__setattr__(self, "_area_cache", cached)
+        return cached
+
+    @property
+    def area(self) -> float:
+        """Nonnegative magnitude ``abs(signed_area)``."""
+        return abs(self.signed_area)
+
+    @property
+    def fill_area(self) -> float:
+        """Nonzero-winding fill area of the enclosed region.
+
+        The Lebesgue measure of the set of points the curve winds about a
+        nonzero number of times: the "physical" enclosed area of a
+        self-intersecting cycle.  A curve certified free of
+        self-intersections returns bitwise ``area``; otherwise the locus
+        is decomposed at its certified transversal crossings
+        (``ClosedSpline_FillArea_Specification.md``).  Lazy on first
+        query, O(1) afterwards.
+        """
+        cached = self._fill_area_cache
+        if cached is None:
+            cached = fill_area_source(
+                [segment.ctrl for segment in self._segments],
+                [[segment.w0, segment.w1] for segment in self._segments],
+                [1.0] * len(self._segments),
+                self._scale,
+                self.area,
+            )
+            object.__setattr__(self, "_fill_area_cache", cached)
+        return cached
+
+    def offset(self, distance: object) -> ClosedNURBSHandle:
+        """Exact closed parallel offset (see :meth:`CubicPHSpline.offset`).
+
+        The verified closed topology publishes the
+        :class:`~ph_spline.nurbs.ClosedNURBSHandle` subtype, which adds the
+        closed-only ``signed_area`` and ``area`` properties.
+        """
+        handle = super().offset(distance)
+        assert isinstance(handle, ClosedNURBSHandle)
+        return handle
+
+    def __setstate__(self, state: dict) -> None:
+        # The scalar area caches are derived, nonauthoritative state;
+        # pickle and copy restoration always clears them (area spec 6.3 /
+        # 11.4, fill spec 9).
+        super().__setstate__(state)
+        object.__setattr__(self, "_area_cache", None)
+        object.__setattr__(self, "_fill_area_cache", None)

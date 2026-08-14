@@ -538,8 +538,11 @@ latency profile can never silently hide it.
     <tr><td><code>arc_length(u: Real) -&gt; float</code></td><td>Length from <code>u=0</code> to <code>u</code>.</td></tr>
     <tr><td><code>parameter_at_length(s: Real) -&gt; float</code></td><td>Parameter at travelled length <code>s</code>.</td></tr>
     <tr><td><code>point_at_length(s: Real) -&gt; NDArray</code></td><td>Position at travelled length <code>s</code>.</td></tr>
-    <tr><td><code>offset(distance: Real) -&gt; NURBSHandle</code></td><td>Exact parallel curve as a verified rational quintic NURBS.</td></tr>
+    <tr><td><code>offset(distance: Real) -&gt; NURBSHandle</code></td><td>Exact parallel curve as a verified rational quintic NURBS; <code>ClosedNURBSHandle</code> from the closed class.</td></tr>
     <tr><td><code>.min_curvature_radii -&gt; tuple[float, float]</code></td><td>Exact smallest left/right curvature radii; cusp-free offset range.</td></tr>
+    <tr><td><code>.signed_area -&gt; float</code></td><td>Closed class only: winding-weighted algebraic area, counterclockwise positive; lazy, O(1) repeated.</td></tr>
+    <tr><td><code>.area -&gt; float</code></td><td>Closed class only: <code>abs(signed_area)</code>.</td></tr>
+    <tr><td><code>.fill_area -&gt; float</code></td><td>Closed class only: nonzero-winding fill area (the physical enclosed region); certified crossing decomposition for self-intersecting cycles, bitwise <code>area</code> when certified simple; lazy.</td></tr>
   </tbody>
 </table>
 
@@ -572,6 +575,9 @@ latency profile can never silently hide it.
     <tr><td><code>.version -&gt; int</code></td><td>State version incremented by each commit.</td></tr>
     <tr><td><code>.diagnostics -&gt; BuildDiagnostics</code></td><td>Latest construction and verification metrics.</td></tr>
     <tr><td><code>.last_edit_report -&gt; Optional[EditReport]</code></td><td>Most recent committed edit report.</td></tr>
+    <tr><td><code>.signed_area -&gt; float</code></td><td>Closed class only: winding-weighted algebraic area, counterclockwise positive; lazy and version-cached, with per-span reuse after local edits.</td></tr>
+    <tr><td><code>.area -&gt; float</code></td><td>Closed class only: <code>abs(signed_area)</code>.</td></tr>
+    <tr><td><code>.fill_area -&gt; float</code></td><td>Closed class only: nonzero-winding fill area (the physical enclosed region); certified crossing decomposition for self-intersecting cycles, bitwise <code>area</code> when certified simple; lazy and version-cached.</td></tr>
   </tbody>
 </table>
 
@@ -603,7 +609,7 @@ latency profile can never silently hide it.
     <tr><td><code>frame_at_length(s: Union[Real, LengthCoordinate]) -&gt; Frame2D</code></td><td>Position, tangent, normal and curvature at length.</td></tr>
     <tr><td><code>advance_by_length(location: CurveLocation, ds: Real) -&gt; CurveLocation</code></td><td>Advance a local location by signed distance.</td></tr>
     <tr><td><code>point_after_length(location: CurveLocation, ds: Real) -&gt; NDArray[np.float64]</code></td><td>Position after signed travel from a location.</td></tr>
-    <tr><td><code>offset(distance: Real) -&gt; NURBSHandle</code></td><td>Exact parallel curve as a verified degree-<code>4m+1</code> rational NURBS; also on snapshots.</td></tr>
+    <tr><td><code>offset(distance: Real) -&gt; NURBSHandle</code></td><td>Exact parallel curve as a verified degree-<code>4m+1</code> rational NURBS; also on snapshots. <code>ClosedNURBSHandle</code> from the closed class.</td></tr>
   </tbody>
 </table>
 
@@ -629,15 +635,16 @@ latency profile can never silently hide it.
     <tr><td><code>PHBSplineEditTransaction.insert_point(index: int, value: ArrayLike) -&gt; PointHandle</code></td><td>Stage an insertion.</td></tr>
     <tr><td><code>PHBSplineEditTransaction.delete_point(point: Union[int, PointHandle]) -&gt; None</code></td><td>Stage a deletion.</td></tr>
     <tr><td><code>PHBSplineEditTransaction.report -&gt; EditReport</code></td><td>Commit report, available after successful context exit.</td></tr>
-    <tr><td><code>snapshot() -&gt; PHBSplineSnapshot</code></td><td>Immutable query-only view of the current version.</td></tr>
+    <tr><td><code>snapshot() -&gt; PHBSplineSnapshot</code></td><td>Immutable query-only view of the current version; <code>PHBSplineClosedSnapshot</code> (with both area properties) from the closed class.</td></tr>
   </tbody>
 </table>
 
 ### NURBS offset handle
 
-`offset(distance)` on every spline class returns the same immutable
-`NURBSHandle`. Positive distance selects the traversal-left normal, negative
-the right; zero is valid. The handle is a verified snapshot: it never
+`offset(distance)` on every spline class returns an immutable
+`NURBSHandle`; closed classes return its `ClosedNURBSHandle` subtype, which
+adds the two closed-only area properties below. Positive distance selects
+the traversal-left normal, negative the right; zero is valid. The handle is a verified snapshot: it never
 mutates, keeps no live back-reference, and stays unchanged when a mutable
 source is edited later. Cusps and self-intersections of the true parallel
 curve are represented exactly, never trimmed. Construction either passes a
@@ -667,6 +674,9 @@ geometry, and the complete distance metric certificate) or raises
     <tr><td><code>parameter_at_length(s: Real) -&gt; float</code></td><td>Unique parameter with <code>arc_length(u) == s</code> for <code>s</code> in <code>[0, length]</code>; certified residual or best-representable-parameter acceptance.</td></tr>
     <tr><td><code>point_at_length(s: Real) -&gt; NDArray[np.float64]</code></td><td>Identical to <code>point(parameter_at_length(s))</code>.</td></tr>
     <tr><td><code>.cusps -&gt; tuple[OffsetCusp, ...]</code></td><td>Certified offset cusps: ascending <code>(parameter, multiplicity)</code> records within two ulps of the exact stationary parameters; odd multiplicity marks a direction reversal. Empty when cusp-free. O(1).</td></tr>
+    <tr><td><code>.signed_area -&gt; float</code></td><td><code>ClosedNURBSHandle</code> only: algebraic offset area <code>A_0 - d L_0 + pi nu d^2</code> from the captured exact source state and certified turning number <code>nu</code>; defined through cusps and self-intersections. Lazy, O(1) repeated.</td></tr>
+    <tr><td><code>.area -&gt; float</code></td><td><code>ClosedNURBSHandle</code> only: <code>abs(signed_area)</code>.</td></tr>
+    <tr><td><code>.fill_area -&gt; float</code></td><td><code>ClosedNURBSHandle</code> only: nonzero-winding fill area of the exact offset locus; cusp loops and self-intersections decomposed at certified crossings, bitwise <code>area</code> when certified simple. Lazy.</td></tr>
   </tbody>
 </table>
 
