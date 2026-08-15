@@ -91,6 +91,15 @@ L = ring.length                       # exact total offset length, O(1)
 s = ring.arc_length(u)                # distance from ring.point(0) to point(u)
 assert ring.parameter_at_length(s) == u
 mid = ring.point_at_length(0.5 * L)   # halfway along the offset ring
+
+# The handle also answers the full differential frame of its own locus,
+# by exact rational differentiation of the published controls:
+# tangent = sign(1 - d*kappa) * T, signed_curvature = kappa / |1 - d*kappa|.
+T = ring.tangent(u)                   # unit traversal tangent
+N = ring.normal(u)                    # left unit normal ("right" available)
+k = ring.signed_curvature(u)          # kappa / |1 - d * kappa| of the source
+K = ring.curvature_vector(u)          # kappa_d * N_left
+P = ring.principal_normal(u)          # toward the shared curvature center
 ```
 
 ### Gallery
@@ -652,6 +661,17 @@ full independent verification (structure, coefficient identities, sampled
 geometry, and the complete distance metric certificate) or raises
 `OffsetConstructionError`; geometry and metric succeed or fail atomically.
 
+Beyond points and distances, the handle answers the complete differential
+frame of its own locus — tangent, oriented normals, principal normal,
+signed curvature, and curvature vector — by exact rational differentiation
+of the published homogeneous controls (a de Casteljau jet plus the
+quotient rule), never by sampling, finite differences, or a source
+callback. The closed-form parallel-curve identities hold exactly:
+`tangent = sign(1 - d*kappa) * T`, `signed_curvature = kappa / |1 - d*kappa|`,
+and `curvature_vector = kappa / (1 - d*kappa) * N_left`, so the direction
+reverses between odd cusps while the curvature sign always matches the
+source.
+
 <table width="100%">
   <thead>
     <tr>
@@ -669,6 +689,11 @@ geometry, and the complete distance metric certificate) or raises
     <tr><td><code>.domain -&gt; tuple[float, float]</code></td><td>Exactly <code>(0.0, 1.0)</code>; the source parameter is unchanged.</td></tr>
     <tr><td><code>.closed -&gt; bool</code></td><td>Whether the source (and seam values) are cyclic.</td></tr>
     <tr><td><code>point(u: Real) -&gt; NDArray[np.float64]</code></td><td>Homogeneous de Boor evaluation with one final division.</td></tr>
+    <tr><td><code>tangent(u: Real) -&gt; NDArray[np.float64]</code></td><td>Unit traversal tangent of the offset locus; equals <code>sign(1 - d*kappa) * T</code> of the source. <code>UndefinedTangentError</code> at a zero-speed cusp.</td></tr>
+    <tr><td><code>normal(u: Real, side="left") -&gt; NDArray[np.float64]</code></td><td>Left or right unit normal of the offset traversal (quarter-turn of the tangent).</td></tr>
+    <tr><td><code>principal_normal(u: Real) -&gt; NDArray[np.float64]</code></td><td>Unit normal toward the curvature center, which the offset shares with its source point; <code>UndefinedPrincipalNormalError</code> when curvature is indistinguishable from zero.</td></tr>
+    <tr><td><code>signed_curvature(u: Real) -&gt; float</code></td><td>Signed curvature of the offset's own traversal, <code>kappa / |1 - d*kappa|</code>; same sign as the source, diverges toward cusps.</td></tr>
+    <tr><td><code>curvature_vector(u: Real) -&gt; NDArray[np.float64]</code></td><td>Curvature vector <code>kappa_d * N_left</code>, equal to <code>kappa / (1 - d*kappa) * N_left</code> of the source; zero vector on straight offsets.</td></tr>
     <tr><td><code>.length -&gt; float</code></td><td>Total traversal length of the offset locus; O(1), correctly rounded.</td></tr>
     <tr><td><code>arc_length(u: Real) -&gt; float</code></td><td>Traversal distance from <code>point(0)</code> to <code>point(u)</code>; correctly rounded, exact endpoint identities.</td></tr>
     <tr><td><code>parameter_at_length(s: Real) -&gt; float</code></td><td>Unique parameter with <code>arc_length(u) == s</code> for <code>s</code> in <code>[0, length]</code>; certified residual or best-representable-parameter acceptance.</td></tr>
@@ -680,9 +705,14 @@ geometry, and the complete distance metric certificate) or raises
   </tbody>
 </table>
 
-Distance queries validate like their source counterparts: real scalars only,
-`u` in `[0, 1]` and `s` in `[0, length]` with a four-ulp endpoint clamp,
-`ParameterOutOfRangeError` / `ArcLengthOutOfRangeError` for material
-excursions, and typed `ArcLengthInversionError` / `NumericalPrecisionError`
-failures instead of unverified results. See
-[section 3](#3-offset-distance-queries) for the semantics and benchmarks.
+Distance and frame queries validate like their source counterparts: real
+scalars only, `u` in `[0, 1]` and `s` in `[0, length]` with a four-ulp
+endpoint clamp, `ParameterOutOfRangeError` / `ArcLengthOutOfRangeError` for
+material excursions, and typed `ArcLengthInversionError` /
+`NumericalPrecisionError` failures instead of unverified results. Frame
+queries raise `UndefinedTangentError` at every certified cusp parameter,
+where the traversal direction is genuinely undefined; the
+[`examples/offset_frames`](examples/offset_frames) gallery renders the
+frame and curvature queries, including the tangent reversal across cusps.
+See [section 3](#3-offset-distance-queries) for the semantics and
+benchmarks.

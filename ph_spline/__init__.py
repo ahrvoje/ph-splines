@@ -71,6 +71,7 @@ from ph_spline.exceptions import (
     StaleLocationError,
     TransactionError,
     UndefinedPrincipalNormalError,
+    UndefinedTangentError,
 )
 
 __version__ = "1.3.0"
@@ -139,4 +140,5 @@ __all__ = [
     "StaleLocationError",
     "TransactionError",
     "UndefinedPrincipalNormalError",
+    "UndefinedTangentError",
 ]

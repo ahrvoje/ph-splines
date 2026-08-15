@@ -223,6 +223,16 @@ class NURBSHandle:
 
     def point(self, u: Real) -> NDArray[np.float64]: ...
 
+    def tangent(self, u: Real) -> NDArray[np.float64]: ...
+
+    def normal(self, u: Real, side: str = "left") -> NDArray[np.float64]: ...
+
+    def principal_normal(self, u: Real) -> NDArray[np.float64]: ...
+
+    def signed_curvature(self, u: Real) -> float: ...
+
+    def curvature_vector(self, u: Real) -> NDArray[np.float64]: ...
+
     def arc_length(self, u: Real) -> float: ...
 
     def parameter_at_length(self, s: Real) -> float: ...
@@ -233,11 +243,14 @@ class NURBSHandle:
     def cusps(self) -> tuple[OffsetCusp, ...]: ...
 ```
 
-The interface SHALL NOT expose mutation, editing, derivatives, fitting
-controls, or a back-reference that can mutate the source spline. `domain` is
-exactly `(0.0, 1.0)`. The four distance members are specified normatively in
+The interface SHALL NOT expose mutation, editing, fitting controls, or a
+back-reference that can mutate the source spline. `domain` is exactly
+`(0.0, 1.0)`. The four distance members are specified normatively in
 `OffsetNURBS_Distance_Specification.md`; that addendum supersedes the earlier
-point-only restriction. `knots` has shape
+point-only restriction. The five frame and curvature queries are specified
+normatively in Section 11.7.7; they evaluate the published rational curve
+itself, require no metric certificate, and supersede the earlier
+no-derivatives restriction of this interface. `knots` has shape
 `(num_control_points + degree + 1,)`, `control_points` has shape
 `(num_control_points, 2)`, and `weights` has shape
 `(num_control_points,)`. All three arrays contain finite binary64 values and
@@ -1567,6 +1580,110 @@ during distance-metric construction are exposed by the read-only `cusps`
 property (`OffsetCusp(parameter, multiplicity)` records, ascending, within
 two ulps of the exact stationary parameters).
 
+### 11.7.7 Frame and curvature queries
+
+The handle SHALL expose the standard differential-frame queries on the
+offset locus itself:
+
+```python
+def tangent(self, u: Real) -> NDArray[np.float64]: ...
+def normal(self, u: Real, side: str = "left") -> NDArray[np.float64]: ...
+def principal_normal(self, u: Real) -> NDArray[np.float64]: ...
+def signed_curvature(self, u: Real) -> float: ...
+def curvature_vector(self, u: Real) -> NDArray[np.float64]: ...
+```
+
+All five refer to the handle's own traversal direction (increasing $u$):
+
+$$
+T_d=\frac{r_d'}{\lVert r_d'\rVert},\qquad
+N_{L,d}=R_L(T_d),\qquad
+\kappa_d=\frac{r_d'\times r_d''}{\lVert r_d'\rVert^{3}},\qquad
+K_d=\kappa_d\,N_{L,d}.
+$$
+
+`normal` returns $N_{L,d}$ for `side="left"` and $-N_{L,d}$ for
+`side="right"` under the side rules of Section 15.2; `principal_normal`
+returns $\operatorname{sign}(\kappa_d)\,N_{L,d}$. Vector results are unit
+(or, for `curvature_vector`, signed-magnitude) binary64 arrays of shape
+`(2,)`; `signed_curvature` is a Python `float`. By Section 11.7.6,
+$dr_d/ds=(1-d\kappa)T$, so the following closed-form identities hold in
+exact arithmetic and SHALL be verification targets:
+
+$$
+T_d=\operatorname{sign}(1-d\kappa)\,T,\qquad
+N_{L,d}=\operatorname{sign}(1-d\kappa)\,N_L,
+$$
+
+$$
+\kappa_d=\frac{\kappa}{\lvert1-d\kappa\rvert},\qquad
+K_d=\frac{\kappa}{1-d\kappa}\,N_L.
+$$
+
+The curvature-vector identity carries no absolute value: the tangent and
+normal reversals cancel. Consequently the sign of $\kappa_d$ equals the
+sign of $\kappa$, the offset shares every curvature center with the source
+point it offsets, $\lvert\kappa_d\rvert$ grows without bound toward a
+cusp, and between odd-multiplicity cusps the tangent and both normals
+reverse.
+
+Evaluation SHALL differentiate the published rational curve exactly:
+locate the homogeneous Bernstein span with the right-sided rule of
+Section 11.7.5, obtain the homogeneous value and first two derivatives by
+one exact de Casteljau jet (the retained level-$(q-1)$ and level-$(q-2)$
+triangle rows, scaled by the span width), and apply the quotient rule
+
+$$
+C=\frac{A}{w},\qquad
+C'=\frac{A'-w'C}{w},\qquad
+C''=\frac{A''-2w'C'-w''C}{w}
+$$
+
+after verifying a finite positive denominator. Sampling, finite
+differencing, calling back into the source spline, and any dependency on
+the distance-metric certificate are forbidden; the queries SHALL work on
+every verified handle. Scalar validation, the few-ulp endpoint clamp, and
+the fresh-array return contract of `point(u)` apply unchanged. At an
+interior breakpoint the two one-sided values agree in exact arithmetic
+(the source is $C^1$ and curvature-continuous away from cusps); the
+right-sided span is selected. For `d == 0` every query SHALL reproduce
+the source frame within the standard forward bounds.
+
+**Zero-speed guard.** Let $[\xi_i,\xi_{i+1}]$ be the located span with
+width $h_i$, $O_k$ its homogeneous controls, and $w(u)$ the evaluated
+denominator. Every frame query SHALL raise `UndefinedTangentError`
+(a shared value error) when the computed speed fails the deterministic
+acceptance gate
+
+$$
+\lVert r_d'(u)\rVert>\tau_1,\qquad
+\tau_1=\gamma_{32(q+1)}\,
+\frac{q}{h_i}\,
+\frac{\bigl(1+\lVert r_d(u)\rVert_\infty\bigr)\max_k\lVert O_k\rVert_\infty}
+{w(u)},
+$$
+
+the first-derivative roundoff noise floor of the jet: below it the
+traversal direction is not numerically meaningful. In particular every
+certified parameter of the `cusps` property SHALL be rejected by this
+gate.
+
+`principal_normal` SHALL additionally raise
+`UndefinedPrincipalNormalError` when the curvature numerator does not
+exceed its own deterministic noise floor,
+
+$$
+\lvert r_d'\times r_d''\rvert>
+\lVert r_d'\rVert\,\tau_2+\lVert r_d''\rVert\,\tau_1,
+\qquad
+\tau_2=\tau_1\,\frac{q}{h_i},
+$$
+
+which in particular rejects every straight offset. `signed_curvature`
+and `curvature_vector` remain defined there and return the computed
+(near-)zero value; a nonfinite result raises
+`NumericalPrecisionError`.
+
 ## 11.8 Minimal curvature radii
 
 `min_curvature_radii` SHALL return the property
@@ -2242,7 +2359,7 @@ Shared value errors:
     InvalidPointDataError, InsufficientPointDataError,
     NonFiniteCoordinateError, DegeneratePointDataError,
     ParameterOutOfRangeError, ArcLengthOutOfRangeError,
-    UndefinedPrincipalNormalError
+    UndefinedPrincipalNormalError, UndefinedTangentError
 
 Shared runtime errors:
     NonRegularSplineError, ArcLengthInversionError,
@@ -2554,7 +2671,20 @@ finite distances. Required checks are:
 - a large-distance self-intersection case, with no trimming or rejection;
 - malformed distance arguments and nonrepresentable output failures;
 - direct high-precision verification of the homogeneous Bernstein
-  coefficient formulas, not only sampled point agreement.
+  coefficient formulas, not only sampled point agreement;
+- the frame and curvature queries of Section 11.7.7 against the
+  closed-form parallel-curve identities
+  ($T_d=\operatorname{sign}(1-d\kappa)T$,
+  $\kappa_d=\kappa/\lvert1-d\kappa\rvert$,
+  $K_d=\kappa/(1-d\kappa)\,N_L$), against an independent
+  finite-difference oracle on the published handle, and for the shared
+  curvature center;
+- `UndefinedTangentError` from every frame query at every certified cusp
+  parameter, the tangent reversal across an odd cusp, and
+  `UndefinedPrincipalNormalError` on a straight offset;
+- frame queries on a `d == 0` handle reproducing the source frames, and
+  the full scalar-validation matrix of `point(u)` applied to all five
+  queries.
 
 The offset acceptance oracle SHALL use at least 100 decimal digits on selected
 curved spans. A general-purpose approximate offset routine is not an oracle.

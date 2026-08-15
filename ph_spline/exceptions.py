@@ -52,6 +52,7 @@ __all__ = [
     "StaleLocationError",
     "TransactionError",
     "UndefinedPrincipalNormalError",
+    "UndefinedTangentError",
 ]
 
 
@@ -177,6 +178,10 @@ class UndefinedPrincipalNormalError(
     CubicPHSplineValueError, PHBSplineValueError
 ):
     """Principal normal requested on a completely straight spline."""
+
+
+class UndefinedTangentError(CubicPHSplineValueError, PHBSplineValueError):
+    """A frame query was evaluated at a zero-speed offset cusp."""
 
 
 class CubicPHSplineRuntimeError(CubicPHSplineError, PHSplineRuntimeError):

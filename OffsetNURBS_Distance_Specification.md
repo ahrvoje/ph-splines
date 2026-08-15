@@ -36,9 +36,13 @@ The existing `point(u)` method and all existing inspection properties remain
 unchanged. These four distance methods and the `cusps` inspection property
 are the complete public scope of this addendum. `OffsetCusp` is the public
 tuple-compatible record type `(parameter: float, multiplicity: int)`.
-In particular, this addendum does not add editing, derivatives,
-frames, `CurveLocation`, versioning, batch methods, or recursive `offset()`
-operations to `NURBSHandle`.
+In particular, this addendum does not add editing, `CurveLocation`,
+versioning, batch methods, or recursive `offset()` operations to
+`NURBSHandle`. The frame and curvature queries of the handle (`tangent`,
+`normal`, `principal_normal`, `signed_curvature`, `curvature_vector`) are
+specified by the family technical specifications (cubic Section 11.7.7,
+PH B-spline Section 15.6.9), not by this addendum; they are geometry-only
+and require no metric certificate.
 
 The methods SHALL measure distance along the offset locus in source traversal
 order. They SHALL retain cusps, reversals, loops, and self-intersections. They

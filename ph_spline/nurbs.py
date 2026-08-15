@@ -10,7 +10,8 @@ specification (section 11.7) and the PH B-spline specification (section
 - canonical projectively-scaled segmented NURBS assembly;
 - an independent verification pass (structure, coefficients, breakpoints,
   interior oracle values) that must succeed before a handle is published;
-- the read-only :class:`NURBSHandle` with homogeneous de Boor evaluation.
+- the read-only :class:`NURBSHandle` with homogeneous de Boor evaluation
+  and exact rational frame and curvature queries (spec 11.7.7 / 15.6.9).
 
 Every quantity is produced by finite Bernstein coefficient products - never
 by sampling, interpolation, or least-squares fitting.  A handle either
@@ -36,6 +37,8 @@ from ph_spline.exceptions import (
     NumericalPrecisionError,
     OffsetConstructionError,
     ParameterOutOfRangeError,
+    UndefinedPrincipalNormalError,
+    UndefinedTangentError,
 )
 from ph_spline.offset_metric import build_offset_metric, rebuild_offset_metric
 
@@ -641,6 +644,229 @@ class NURBSHandle:
             )
         return result
 
+    # -- frame and curvature queries (spec 11.7.7 / 15.6.9) ---------------
+
+    def _rational_jet(
+        self, u: float
+    ) -> tuple[
+        NDArray[np.float64],
+        NDArray[np.float64],
+        NDArray[np.float64],
+        float,
+        float,
+    ]:
+        """Rational point, velocity, and acceleration at an accepted ``u``.
+
+        The canonical segmented knot vector makes every span a pure
+        homogeneous Bernstein patch, so the derivatives come from one
+        exact de Casteljau jet of the located span followed by the
+        quotient rule
+
+        ``C = A / w``,
+        ``C' = (A' - C w') / w``,
+        ``C'' = (A'' - 2 w' C' - w'' C) / w``,
+
+        in user coordinates and with respect to the global parameter.
+        Also returns the deterministic first- and second-derivative
+        noise floors ``tau1`` and ``tau2`` of the zero-speed and
+        zero-curvature acceptance gates.  Span selection is right-sided,
+        exactly as in :meth:`point`.
+        """
+        q = self._degree
+        knots = self._knots
+        k = int(np.searchsorted(knots, u, side="right")) - 1
+        k = min(max(k, q), self._points.shape[0] - 1)
+        span = (k - q) // q
+        lo = float(knots[k])
+        hi = float(knots[k + 1])
+        width = hi - lo
+        if not width > 0.0:
+            raise NumericalPrecisionError(
+                "Offset span breakpoint interval collapsed",
+                index=span,
+                quantity="span width",
+                value=width,
+                bound="> 0",
+            )
+        t = (u - lo) / width
+        patch = self._homogeneous[span * q : span * q + q + 1]
+        h0, h1, h2 = _decasteljau_jet(patch, t)
+        w = float(h0[2])
+        if not (w > 0.0 and math.isfinite(w)):
+            raise NumericalPrecisionError(
+                "NURBS denominator is not positive and finite",
+                quantity="denominator",
+                value=w,
+                bound="> 0",
+            )
+        point = h0[:2] / w
+        w1 = float(h1[2]) / width
+        w2 = float(h2[2]) / width**2
+        velocity = (h1[:2] / width - w1 * point) / w
+        acceleration = (
+            h2[:2] / width**2 - 2.0 * w1 * velocity - w2 * point
+        ) / w
+        condition = (
+            float(np.max(np.abs(patch)))
+            * (1.0 + float(np.max(np.abs(point))))
+            / w
+        )
+        base = _gamma(32 * (q + 1)) * condition
+        tau1 = base * (q / width)
+        tau2 = base * (q / width) ** 2
+        return point, velocity, acceleration, tau1, tau2
+
+    def _frame_jet(
+        self, u: object
+    ) -> tuple[
+        NDArray[np.float64],
+        NDArray[np.float64],
+        NDArray[np.float64],
+        float,
+        float,
+        float,
+    ]:
+        """Validated jet behind every frame query.
+
+        Applies the scalar rules of :meth:`point`, then the deterministic
+        zero-speed acceptance gate ``speed > tau1``: below the noise
+        floor the traversal direction is not numerically meaningful, so
+        every frame query raises :class:`UndefinedTangentError` there —
+        in particular at every certified parameter of :attr:`cusps`.
+        """
+        value = self._validate_u(u)
+        point, velocity, acceleration, tau1, tau2 = self._rational_jet(value)
+        speed = float(np.hypot(velocity[0], velocity[1]))
+        if not (
+            math.isfinite(speed)
+            and np.all(np.isfinite(acceleration))
+        ):
+            raise NumericalPrecisionError(
+                "Offset derivative evaluation produced a nonfinite value",
+                quantity="derivative",
+                value=(velocity.tolist(), acceleration.tolist()),
+            )
+        if not speed > tau1:
+            raise UndefinedTangentError(
+                "Offset frame is undefined at a zero-speed cusp",
+                quantity="offset speed",
+                value=speed,
+                bound=f"> {tau1:.3e}",
+            )
+        return point, velocity, acceleration, speed, tau1, tau2
+
+    def tangent(self, u: object) -> NDArray[np.float64]:
+        """Unit traversal tangent of the offset locus at ``u``.
+
+        Computed by exact rational differentiation of the published
+        homogeneous controls — never by sampling or a source callback.
+        Equals ``sign(1 - d * kappa(u)) * T(u)`` of the source in exact
+        arithmetic, so the direction reverses between odd-multiplicity
+        cusps.  Raises :class:`UndefinedTangentError` at a zero-speed
+        cusp, where the direction is undefined.
+        """
+        _, velocity, _, speed, _, _ = self._frame_jet(u)
+        return np.array(
+            [velocity[0] / speed, velocity[1] / speed], dtype=np.float64
+        )
+
+    def normal(self, u: object, side: str = "left") -> NDArray[np.float64]:
+        """Unit left or right normal of the offset traversal at ``u``.
+
+        The left normal is the quarter-turn ``R_L(T) = (-T_y, T_x)`` of
+        the unit tangent, the right normal its negation.  Equals
+        ``sign(1 - d * kappa(u)) * N(u)`` of the same-side source normal
+        in exact arithmetic.
+        """
+        if side == "left":
+            sign = 1.0
+        elif side == "right":
+            sign = -1.0
+        else:
+            raise ValueError(
+                f'normal() side must be "left" or "right", got {side!r}'
+            )
+        _, velocity, _, speed, _, _ = self._frame_jet(u)
+        tx = velocity[0] / speed
+        ty = velocity[1] / speed
+        return np.array([-sign * ty, sign * tx], dtype=np.float64)
+
+    def signed_curvature(self, u: object) -> float:
+        """Signed curvature of the offset locus at ``u``.
+
+        ``kappa_d = (r_d' x r_d'') / ||r_d'||**3`` with respect to the
+        handle's own traversal direction; positive turns left.  Equals
+        ``kappa / |1 - d * kappa|`` of the source in exact arithmetic:
+        the sign matches the source curvature and the magnitude grows
+        without bound toward a cusp.  Finite values are returned as
+        computed; a zero-speed cusp raises
+        :class:`UndefinedTangentError` and a nonfinite result raises
+        :class:`NumericalPrecisionError`.
+        """
+        _, velocity, acceleration, speed, _, _ = self._frame_jet(u)
+        cross = float(
+            velocity[0] * acceleration[1] - velocity[1] * acceleration[0]
+        )
+        result = cross / speed**3
+        if not math.isfinite(result):
+            raise NumericalPrecisionError(
+                "Offset signed curvature is not finite",
+                quantity="signed curvature",
+                value=result,
+            )
+        return result
+
+    def curvature_vector(self, u: object) -> NDArray[np.float64]:
+        """Curvature vector ``K = kappa_d * N_L`` of the offset at ``u``.
+
+        Parameterization-independent; equals
+        ``kappa / (1 - d * kappa) * N_L`` of the source in exact
+        arithmetic (no absolute value: the tangent and normal reversals
+        cancel).  A straight offset returns the zero vector.
+        """
+        _, velocity, acceleration, speed, _, _ = self._frame_jet(u)
+        cross = float(
+            velocity[0] * acceleration[1] - velocity[1] * acceleration[0]
+        )
+        kappa = cross / speed**3
+        if not math.isfinite(kappa):
+            raise NumericalPrecisionError(
+                "Offset signed curvature is not finite",
+                quantity="signed curvature",
+                value=kappa,
+            )
+        tx = velocity[0] / speed
+        ty = velocity[1] / speed
+        return np.array([-kappa * ty, kappa * tx], dtype=np.float64)
+
+    def principal_normal(self, u: object) -> NDArray[np.float64]:
+        """Unit normal toward the offset's local center of curvature.
+
+        ``sign(kappa_d) * N_L(u)``; the offset shares its curvature
+        center with the source point it offsets.  Raises
+        :class:`UndefinedPrincipalNormalError` when the curvature
+        numerator does not exceed its deterministic roundoff noise floor
+        (straight offsets), and :class:`UndefinedTangentError` at a
+        zero-speed cusp.
+        """
+        _, velocity, acceleration, speed, tau1, tau2 = self._frame_jet(u)
+        cross = float(
+            velocity[0] * acceleration[1] - velocity[1] * acceleration[0]
+        )
+        magnitude = float(np.hypot(acceleration[0], acceleration[1]))
+        floor = speed * tau2 + magnitude * tau1
+        if not abs(cross) > floor:
+            raise UndefinedPrincipalNormalError(
+                "Principal normal is undefined at zero offset curvature",
+                quantity="curvature numerator",
+                value=cross,
+                bound=f"abs > {floor:.3e}",
+            )
+        sign = 1.0 if cross > 0.0 else -1.0
+        tx = velocity[0] / speed
+        ty = velocity[1] / speed
+        return np.array([-sign * ty, sign * tx], dtype=np.float64)
+
 
 class ClosedNURBSHandle(NURBSHandle):
     """Closed exact-offset handle with the closed-topology area interface.
@@ -768,6 +994,39 @@ def _deboor_homogeneous(
         float(work[degree, 1]),
         float(work[degree, 2]),
     )
+
+
+def _decasteljau_jet(
+    patch: NDArray[np.float64], t: float
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Homogeneous value and first two local derivatives at ``t``.
+
+    One de Casteljau pass over a degree-``n`` homogeneous Bernstein patch,
+    retaining the last two triangle levels: with the level-``n - 1``
+    points ``a0, a1`` and the level-``n - 2`` points ``c0, c1, c2``,
+
+    ``H(t) = (1 - t) a0 + t a1``,
+    ``H'(t) = n (a1 - a0)``,
+    ``H''(t) = n (n - 1) (c2 - 2 c1 + c0)``.
+
+    Every step is a finite combination of the published controls; no
+    sampling or finite differencing is involved.  A degree-1 patch has an
+    identically zero second derivative.
+    """
+    n = patch.shape[0] - 1
+    work = np.array(patch, copy=True)
+    s = 1.0 - t
+    first = np.zeros(patch.shape[1], dtype=np.float64)
+    second = np.zeros(patch.shape[1], dtype=np.float64)
+    for width in range(n, 0, -1):
+        if width == 2:
+            second = float(n * (n - 1)) * (
+                work[2] - 2.0 * work[1] + work[0]
+            )
+        if width == 1:
+            first = float(n) * (work[1] - work[0])
+        work[:width] = s * work[:width] + t * work[1 : width + 1]
+    return np.array(work[0], copy=True), first, second
 
 
 # ---------------------------------------------------------------------------
